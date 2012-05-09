@@ -1,7 +1,7 @@
 Name:                mega-sdist
 Version:             0.1
 Synopsis:            Handles uploading to Hackage from mega repos
-Description:         Compares local code against version on Hackage. Accepts --gittag option to automatically tag as well. Uses sources.txt
+Description:         See README.md
 Homepage:            https://github.com/snoyberg/mega-sdist
 License:             MIT
 License-file:        LICENSE
