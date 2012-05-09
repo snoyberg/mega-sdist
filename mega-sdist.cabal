@@ -1,0 +1,28 @@
+Name:                mega-sdist
+Version:             0.1
+Synopsis:            Handles uploading to Hackage from mega repos
+Description:         Compares local code against version on Hackage. Accepts --gittag option to automatically tag as well. Uses sources.txt
+Homepage:            https://github.com/snoyberg/mega-sdist
+License:             MIT
+License-file:        LICENSE
+Author:              Michael Snoyman
+Maintainer:          michael@snoyman.com
+Category:            Distribution
+Build-type:          Simple
+Cabal-version:       >=1.2
+
+Executable mega-sdist
+  Main-is:             mega-sdist.hs
+  Build-depends:       base             >= 4              && < 5
+                     , shelly           >= 0.7            && < 0.8
+                     , conduit          >= 0.4            && < 0.5
+                     , zlib-conduit     >= 0.4            && < 0.5
+                     , http-conduit     >= 1.4            && < 1.5
+                     , system-filepath  >= 0.4            && < 0.5
+                     , system-fileio    >= 0.3            && < 0.4
+                     , http-types
+                     , transformers
+                     , tar
+                     , bytestring
+                     , containers
+                     , text
