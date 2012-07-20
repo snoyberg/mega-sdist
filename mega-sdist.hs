@@ -62,7 +62,7 @@ main = do
             chdir (decodeString dir) $ do
                 rm_rf "dist"
                 when toTest $ do
-                    run_ "cabal" ["configure", "--enable-tests"]
+                    run_ "cabal" ["configure", "--enable-tests", "-ftest_export"]
                     run_ "cabal" ["build"]
                     run_ "cabal" ["test"]
                 run_ "cabal" ["sdist"]
