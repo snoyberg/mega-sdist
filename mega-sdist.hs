@@ -54,7 +54,11 @@ main = do
     let toTest = "--test" `elem` args
         toTag = "--gittag" `elem` args
 
-    dirs <- fmap lines $ Prelude.readFile "sources.txt"
+    exists <- isFile "sources.txt"
+    dirs <-
+        if exists
+            then fmap lines $ Prelude.readFile "sources.txt"
+            else return ["."]
     shelly $ do
         rm_rf "tarballs"
         mkdir "tarballs"
