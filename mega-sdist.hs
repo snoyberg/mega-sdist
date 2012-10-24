@@ -32,7 +32,8 @@ debug = const $ return ()
 getUrlHackage :: Package -> IO (Request m)
 getUrlHackage (Package a b) = do
     debug url
-    parseUrl url
+    req <- parseUrl url
+    return req { responseTimeout = Nothing }
   where
     url = concat
         [ "http://hackage.haskell.org/packages/archive/"
