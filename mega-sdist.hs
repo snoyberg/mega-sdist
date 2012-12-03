@@ -21,6 +21,7 @@ import Control.Exception (try, SomeException (..))
 import Control.Monad.IO.Class (liftIO)
 import Shelly hiding ((</>))
 import Data.Maybe (mapMaybe, fromMaybe)
+import Network (withSocketsDo)
 
 debug :: String -> IO ()
 #ifdef DEBUG
@@ -48,7 +49,7 @@ getUrlHackage (Package a b) = do
         ]
 
 main :: IO ()
-main = do
+main = withSocketsDo $ do
     manager <- newManager def
     args <- getArgs
 
