@@ -128,7 +128,14 @@ go m fp = do
                 | fh -> handleFile localFileHackage NoChanges
                 | otherwise -> do
                     reqH <- getUrlHackage package
-                    resH <- C.runResourceT $ httpLbs reqH { rawBody = True, checkStatus = \_ _ -> Nothing } m
+                    resH <- C.runResourceT $ httpLbs reqH
+                        { rawBody = True
+#if MIN_VERSION_http_conduit(1, 9, 0)
+                        , checkStatus = \_ _ _ -> Nothing
+#else
+                        , checkStatus = \_ _ -> Nothing
+#endif
+                        } m
                     case () of
                         ()
                             | responseStatus resH == status404 || L.length (responseBody resH) == 0 -> do
