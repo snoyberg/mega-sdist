@@ -3,6 +3,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 import Prelude hiding (FilePath, getContents)
 import System.Environment (getArgs)
+import System.Directory (doesDirectoryExist)
 import Network.HTTP.Conduit
 import Network.HTTP.Types (status200, status404, status502)
 import Filesystem
@@ -11,7 +12,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Map as Map
 import qualified Data.Set as Set
-import Control.Monad (when, forM_, forM)
+import Control.Monad (when, forM_, forM, filterM)
 import qualified Data.ByteString.Lazy as L
 import qualified Codec.Archive.Tar as Tar
 import Data.Conduit.Zlib (ungzip)
@@ -59,7 +60,7 @@ main = withSocketsDo $ do
     exists <- isFile "sources.txt"
     dirs <-
         if exists
-            then fmap lines $ Prelude.readFile "sources.txt"
+            then fmap lines (Prelude.readFile "sources.txt") >>= filterM doesDirectoryExist
             else return ["."]
     shelly $ do
         rm_rf "tarballs"
