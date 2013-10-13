@@ -105,7 +105,7 @@ main = withSocketsDo $ do
                         x <- T.stripSuffix "-" x'
                         return $ T.concat [x, "/", y]
                 forM_ tags $ \tag -> putStrLn $ "git tag " ++ T.unpack tag
-                shelly $ forM_ tags $ \tag -> run_ "git" ["tag", TL.fromStrict tag]
+                shelly $ forM_ tags $ \tag -> run_ "git" ["tag", tag]
         Just s -> do
             putStrLn "\nThe following packages require a version bump:"
             mapM_ say $ Set.toList s
