@@ -130,11 +130,10 @@ go m fp = do
                 | otherwise -> do
                     reqH <- getUrlHackage package
                     resH <- C.runResourceT $ httpLbs reqH
-                        { rawBody = True
 #if MIN_VERSION_http_conduit(1, 9, 0)
-                        , checkStatus = \_ _ _ -> Nothing
+                        { checkStatus = \_ _ _ -> Nothing
 #else
-                        , checkStatus = \_ _ -> Nothing
+                        { checkStatus = \_ _ -> Nothing
 #endif
                         } m
                     case () of
