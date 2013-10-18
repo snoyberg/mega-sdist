@@ -1,5 +1,5 @@
 Name:                mega-sdist
-Version:             0.2.10.1
+Version:             0.2.10.2
 Synopsis:            Handles uploading to Hackage from mega repos
 Description:         See README.md
 Homepage:            https://github.com/snoyberg/mega-sdist
@@ -14,7 +14,7 @@ Cabal-version:       >=1.8
 Executable mega-sdist
   Main-is:             mega-sdist.hs
   Build-depends:       base             >= 4              && < 5
-                     , shelly           >= 0.13
+                     , shelly           >= 1.3.1
                      , conduit          >= 0.5
                      , zlib-conduit     >= 0.5
                      , http-conduit     >= 1.5
