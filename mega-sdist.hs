@@ -31,7 +31,12 @@ debug = putStrLn
 debug = const $ return ()
 #endif
 
-getUrlHackage :: Package -> IO (Request m)
+getUrlHackage :: Package
+#if MIN_VERSION_http_conduit(2, 0, 0)
+              -> IO Request
+#else
+              -> IO (Request m)
+#endif
 getUrlHackage (Package a b) = do
     debug url
     req <- parseUrl url
@@ -51,7 +56,12 @@ getUrlHackage (Package a b) = do
 
 main :: IO ()
 main = withSocketsDo $ do
-    manager <- newManager def
+    manager <- newManager
+#if MIN_VERSION_http_conduit(2, 0 ,0)
+        conduitManagerSettings
+#else
+        def
+#endif
     args <- getArgs
 
     let toTest = "--test" `elem` args
