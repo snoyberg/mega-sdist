@@ -1,6 +1,6 @@
 Name:                mega-sdist
-Version:             0.2.10.3
-Synopsis:            Handles uploading to Hackage from mega repos
+Version:             0.2.10.4
+Synopsis:            Handles uploading to Hackage from mega repos (deprecated)
 Description:         See README.md
 Homepage:            https://github.com/snoyberg/mega-sdist
 License:             MIT
