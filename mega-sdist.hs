@@ -1,59 +1,24 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE CPP #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-import Prelude hiding (FilePath, getContents)
-import System.Environment (getArgs)
-import System.Directory (doesDirectoryExist)
-import Network.HTTP.Conduit
+{-# LANGUAGE NoImplicitPrelude #-}
+import ClassyPrelude.Conduit
+import System.Directory
+import Network.HTTP.Simple
 import Network.HTTP.Types (status200, status404, status502)
-import Filesystem
-import Filesystem.Path.CurrentOS hiding (concat)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
-import qualified Data.Map as Map
-import qualified Data.Set as Set
-import Control.Monad (when, forM_, forM, filterM)
 import qualified Data.ByteString.Lazy as L
 import qualified Codec.Archive.Tar as Tar
 import Data.Conduit.Zlib (ungzip)
-import qualified Data.Conduit as C
-import qualified Data.Conduit.List as CL
-import Control.Exception (try, SomeException (..))
-import Control.Monad.IO.Class (liftIO)
-import Shelly hiding ((</>))
-import Data.Maybe (mapMaybe, fromMaybe)
-import Network (withSocketsDo)
-import Control.Monad.Trans.Resource (runResourceT)
+import System.Process.Typed
+import System.FilePath
+import Data.Conduit.Binary (sinkFileCautious)
+import Data.Yaml (Value (..), decodeEither')
 
-debug :: String -> IO ()
-#ifdef DEBUG
-debug = putStrLn
-#else
-debug = const $ return ()
-#endif
-
-getUrlHackage :: Package
-#if MIN_VERSION_http_conduit(2, 0, 0)
-              -> IO Request
-#else
-              -> IO (Request m)
-#endif
-getUrlHackage (Package a b) = do
-    debug url
-#if MIN_VERSION_http_conduit(2, 2, 0)
-    req <- parseRequest url
-#else
-    req <- parseUrl url
-#endif
-    return req
-#if MIN_VERSION_http_conduit(2, 2, 0)
-        { responseTimeout = responseTimeoutNone }
-#else
-        { responseTimeout = Nothing }
-#endif
-  where
-    url = concat
-        [ "http://hackage.haskell.org/packages/archive/"
+getUrlHackage :: Package -> IO Request
+getUrlHackage (Package a b) =
+    parseRequest $ concat
+        [ "https://s3.amazonaws.com/hackage.fpcomplete.com/packages/archive/"
         , a
         , "/"
         , b
@@ -64,83 +29,87 @@ getUrlHackage (Package a b) = do
         , ".tar.gz"
         ]
 
+getPaths :: Value -> IO [FilePath]
+getPaths value = maybe (error $ "getPaths failed: " ++ show value) return $ do
+    Object top <- return value
+    Object locals <- lookup "locals" top
+    forM (toList locals) $ \l -> do
+        Object o <- return l
+        String path <- lookup "path" o
+        return $ unpack path
+
 main :: IO ()
-main = withSocketsDo $ do
-    manager <- newManager
-#if MIN_VERSION_http_conduit(2, 0 ,0)
-        conduitManagerSettings
-#else
-        def
-#endif
+main = do
     args <- getArgs
 
-    let toTest = "--test" `elem` args
-        toTag = "--gittag" `elem` args
+    let toTag = "--gittag" `elem` args
 
-    exists <- isFile "sources.txt"
-    dirs <-
-        if exists
-            then fmap lines (Prelude.readFile "sources.txt") >>= filterM doesDirectoryExist
-            else return ["."]
-    shelly $ do
-        rm_rf "tarballs"
-        mkdir "tarballs"
-        files' <- forM dirs $ \dir -> do
-            chdir (decodeString dir) $ do
-                rm_rf "dist"
-                when toTest $ do
-                    run_ "cabal" ["configure", "--enable-tests", "-ftest_export"]
-                    run_ "cabal" ["build"]
-                    run_ "cabal" ["test"]
-                run_ "cabal" ["sdist"]
-                ls "dist" >>= mapM absPath . filter (flip hasExtension "gz")
-        forM_ (concat files') $ \file -> mv file $ "tarballs" </> filename file
+    (queryBS, _) <- readProcess_ $ proc "stack" ["query"]
+    queryValue <-
+        case decodeEither' (toStrict queryBS) of
+            Left e -> error $ "Could not parse 'stack query': " ++ show e
+            Right x -> return x
+    allDirs <- getPaths queryValue
+    myPath <- canonicalizePath "."
+    let dirs = filter (myPath `isPrefixOf`) allDirs
 
-    tarballs <- listDirectory "tarballs"
-    ss <- mapM (go manager) tarballs
-    let m = Map.unionsWith Set.union ss
-    let say = putStrLn . reverse . drop 7 . reverse . encodeString . filename
+    whenM (doesDirectoryExist "tarballs") $ removeDirectoryRecursive "tarballs"
+    createDirectoryIfMissing True "tarballs"
 
-    case Map.lookup NoChanges m of
+    tarballs <- forM dirs $ \dir -> do
+        (_, output) <- readProcess_ $ setWorkingDir dir $ proc "stack" ["sdist"]
+        case lastMay $ map unpack $ words $ decodeUtf8 output of
+            Just fp -> do
+                let dest = "tarballs" </> takeFileName fp
+                renameFile fp dest
+                return dest
+            Nothing -> error $ "Unexpected 'stack sdist' output in dir: " ++ dir
+
+    m <- unionsWith mappend <$> mapM go tarballs
+    let say = sayString . reverse . drop 7 . reverse . takeFileName
+
+    case lookup NoChanges m of
         Nothing -> return ()
         Just s -> do
-            putStrLn "The following packages from Hackage have not changed:"
-            mapM_ say $ Set.toList s
-            mapM_ removeFile $ Set.toList s
+            say "The following packages from Hackage have not changed:"
+            mapM_ say s
+            mapM_ removeFile s
 
-    case Map.lookup DoesNotExist m of
+    case lookup DoesNotExist m of
         Nothing -> return ()
         Just s -> do
-            putStrLn "\nThe following new packages exist locally:"
-            mapM_ say $ Set.toList s
+            say "\nThe following new packages exist locally:"
+            mapM_ say s
 
-    case Map.lookup NeedsVersionBump m of
+    case lookup NeedsVersionBump m of
         Nothing -> do
-            putStrLn "\nNo version bumps required, good to go!"
+            say "\nNo version bumps required, good to go!"
             when toTag $ do
-                let tags = mapMaybe (mkTag . either id id . toText . filename) $ Set.toList $ fromMaybe Set.empty $ Map.lookup DoesNotExist m
+                let tags = mapMaybe (mkTag . pack . takeFileName) $ toList $ fromMaybe mempty $ lookup DoesNotExist m
                     mkTag t = do
                         base <- T.stripSuffix ".tar.gz" t
                         let (x', y) = T.breakOnEnd "-" base
                         x <- T.stripSuffix "-" x'
                         return $ T.concat [x, "/", y]
-                forM_ tags $ \tag -> putStrLn $ "git tag " ++ T.unpack tag
-                shelly $ forM_ tags $ \tag -> run_ "git" ["tag", tag]
+                let pcs = map
+                        (\tag -> proc "git" ["tag", unpack tag])
+                        tags
+                mapM_ sayShow pcs
+                mapM_ runProcess_ pcs
         Just s -> do
-            putStrLn "\nThe following packages require a version bump:"
-            mapM_ say $ Set.toList s
+            say "\nThe following packages require a version bump:"
+            mapM_ say s
 
 data Status = DoesNotExist | NoChanges | NeedsVersionBump
     deriving (Show, Eq, Ord)
 
-go :: Manager -> FilePath -> IO (Map.Map Status (Set.Set FilePath))
-go m fp = do
-    let base = T.reverse $ T.drop 7 $ T.reverse $ either id id $ toText $ filename fp
+go :: FilePath -> IO (Map Status (Set FilePath))
+go fp = do
+    let base = T.reverse $ T.drop 7 $ T.reverse $ pack $ takeFileName fp
     let package = parsePackage $ T.unpack base
     localFileHackage <- liftIO $ getHackageFile package
-    fh <- liftIO $ isFile localFileHackage
+    fh <- liftIO $ doesFileExist localFileHackage
     let handleFile localFile noChanges = do
-            debug $ "Comparing: " ++ show (fp, localFile)
             isDiff <- compareTGZ localFile fp
             return $ if isDiff then NeedsVersionBump else noChanges
     status <-
@@ -149,27 +118,17 @@ go m fp = do
                 | fh -> handleFile localFileHackage NoChanges
                 | otherwise -> do
                     reqH <- getUrlHackage package
-                    resH <- runResourceT $ httpLbs reqH
-#if !MIN_VERSION_http_conduit(2, 2, 0)
-#if MIN_VERSION_http_conduit(1, 9, 0)
-                        { checkStatus = \_ _ _ -> Nothing
-#else
-                        { checkStatus = \_ _ -> Nothing
-#endif
-                        }
-#endif
-                        m
+                    runResourceT $ httpSink reqH $ \resH -> do
                     case () of
-                        ()
-                            | responseStatus resH == status404 || L.length (responseBody resH) == 0 -> do
-                                liftIO $ debug $ "Not found on Hackage: " ++ show fp
-                                return DoesNotExist
-                            | responseStatus resH == status200 -> do
-                                createTree $ directory localFileHackage
-                                L.writeFile (encodeString localFileHackage) $ responseBody resH
-                                handleFile localFileHackage NoChanges
-                            | otherwise -> error $ "Invalid status code: " ++ show (responseStatus resH)
-    return $ Map.singleton status $ Set.singleton fp
+                     ()
+                      | getResponseStatusCode resH == 404 -> return DoesNotExist
+                      | getResponseStatusCode resH == 403 -> return DoesNotExist
+                      | getResponseStatusCode resH == 200 -> do
+                            liftIO $ createDirectoryIfMissing True $ takeDirectory localFileHackage
+                            sinkFileCautious localFileHackage
+                            liftIO $ handleFile localFileHackage NoChanges
+                      | otherwise -> error $ "Invalid status code: " ++ show (getResponseStatus resH)
+    return $ singletonMap status $ singletonSet fp
 
 data Package = Package String String
 
@@ -184,31 +143,35 @@ parsePackage s =
 
 getHackageFile :: Package -> IO FilePath
 getHackageFile (Package a b) = do
-    cache <- getAppCacheDirectory "sdist-check"
-    return $ cache </> "hackage" </> decodeString (concat [a, "-", b, ".tar.gz"])
+    stack <- getAppUserDataDirectory "stack"
+    return $ stack </> "indices" </> "Hackage" </> "packages" </> a </> b </>
+                concat [a, "-", b, ".tar.gz"]
 
 compareTGZ :: FilePath -> FilePath -> IO Bool
-compareTGZ a b = {- FIXME catcher $ -} do
+compareTGZ a b = do
     a' <- getContents a
     b' <- getContents b
     return $ a' /= b'
   where
-    -- catcher = handle (\SomeException{} -> debug (show ("compareTGZ" :: String, a, b)) >> return True)
+    getContents :: FilePath -> IO (Map FilePath LByteString)
     getContents fp = do
-        lbs <- L.readFile (encodeString fp)
-        ebss <- try $ runResourceT $ CL.sourceList (L.toChunks lbs) C.$$ ungzip C.=$ CL.consume
+        ebss <- tryAny
+              $ runConduitRes
+              $ sourceFile fp
+             .| ungzip
+             .| sinkList -- could use tar-conduit and avoid in-memory, but it'll happen later anyway
         case ebss of
-            Left (e :: SomeException) -> do
-                putStrLn $ concat
+            Left e -> do
+                say $ concat
                     [ "Error opening tarball: "
-                    , encodeString fp
+                    , pack fp
                     , ", "
-                    , show e
+                    , tshow e
                     ]
-                return Map.empty
+                return mempty
             Right bss -> do
                 l <- toList $ Tar.read $ L.fromChunks bss
-                return $ Map.unions $ map go' l
+                return $ foldMap go' l
     toList (Tar.Next e es) = do
         l <- toList es
         return $ e : l
@@ -216,5 +179,5 @@ compareTGZ a b = {- FIXME catcher $ -} do
     toList (Tar.Fail s) = error $ show s
     go' e =
         case Tar.entryContent e of
-            Tar.NormalFile lbs _ -> Map.singleton (Tar.entryPath e) lbs
-            _ -> Map.empty
+            Tar.NormalFile lbs _ -> asMap $ singletonMap (Tar.entryPath e) lbs
+            _ -> mempty
