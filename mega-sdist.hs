@@ -23,6 +23,7 @@ import Control.Monad.IO.Class (liftIO)
 import Shelly hiding ((</>))
 import Data.Maybe (mapMaybe, fromMaybe)
 import Network (withSocketsDo)
+import Control.Monad.Trans.Resource (runResourceT)
 
 debug :: String -> IO ()
 #ifdef DEBUG
@@ -39,8 +40,17 @@ getUrlHackage :: Package
 #endif
 getUrlHackage (Package a b) = do
     debug url
+#if MIN_VERSION_http_conduit(2, 2, 0)
+    req <- parseRequest url
+#else
     req <- parseUrl url
-    return req { responseTimeout = Nothing }
+#endif
+    return req
+#if MIN_VERSION_http_conduit(2, 2, 0)
+        { responseTimeout = responseTimeoutNone }
+#else
+        { responseTimeout = Nothing }
+#endif
   where
     url = concat
         [ "http://hackage.haskell.org/packages/archive/"
@@ -139,13 +149,16 @@ go m fp = do
                 | fh -> handleFile localFileHackage NoChanges
                 | otherwise -> do
                     reqH <- getUrlHackage package
-                    resH <- C.runResourceT $ httpLbs reqH
+                    resH <- runResourceT $ httpLbs reqH
+#if !MIN_VERSION_http_conduit(2, 2, 0)
 #if MIN_VERSION_http_conduit(1, 9, 0)
                         { checkStatus = \_ _ _ -> Nothing
 #else
                         { checkStatus = \_ _ -> Nothing
 #endif
-                        } m
+                        }
+#endif
+                        m
                     case () of
                         ()
                             | responseStatus resH == status404 || L.length (responseBody resH) == 0 -> do
@@ -183,7 +196,7 @@ compareTGZ a b = {- FIXME catcher $ -} do
     -- catcher = handle (\SomeException{} -> debug (show ("compareTGZ" :: String, a, b)) >> return True)
     getContents fp = do
         lbs <- L.readFile (encodeString fp)
-        ebss <- try $ C.runResourceT $ CL.sourceList (L.toChunks lbs) C.$$ ungzip C.=$ CL.consume
+        ebss <- try $ runResourceT $ CL.sourceList (L.toChunks lbs) C.$$ ungzip C.=$ CL.consume
         case ebss of
             Left (e :: SomeException) -> do
                 putStrLn $ concat
