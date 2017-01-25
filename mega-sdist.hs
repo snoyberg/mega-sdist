@@ -4,8 +4,6 @@
 import ClassyPrelude.Conduit
 import System.Directory
 import Network.HTTP.Simple
-import qualified Data.Text as T
-import qualified Data.ByteString.Lazy as L
 import qualified Codec.Archive.Tar as Tar
 import Data.Conduit.Zlib (ungzip)
 import System.Process.Typed
@@ -14,8 +12,8 @@ import Data.Conduit.Binary (sinkFileCautious)
 import Data.Yaml (Value (..), decodeEither')
 
 getUrlHackage :: Package -> IO Request
-getUrlHackage (Package a b) =
-    parseRequest $ concat
+getUrlHackage (Package _fp (PackageName a) (Version b)) =
+    parseRequest $ unpack $ concat
         [ "https://s3.amazonaws.com/hackage.fpcomplete.com/packages/archive/"
         , a
         , "/"
@@ -64,47 +62,40 @@ main = do
             Nothing -> error $ "Unexpected 'stack sdist' output in dir: " ++ dir
 
     m <- unionsWith mappend <$> mapM go tarballs
-    let say' = sayString . reverse . drop 7 . reverse . takeFileName
 
     case lookup NoChanges m of
         Nothing -> return ()
         Just s -> do
             say "The following packages from Hackage have not changed:"
-            mapM_ say' s
-            mapM_ removeFile s
+            mapM_ sayPackage s
+            mapM_ (removeFile . packageFile) s
 
     case lookup DoesNotExist m of
         Nothing -> return ()
         Just s -> do
             say "\nThe following new packages exist locally:"
-            mapM_ say' s
+            mapM_ sayPackage s
 
     case lookup NeedsVersionBump m of
         Nothing -> do
             say "\nNo version bumps required, good to go!"
             when toTag $ do
-                let tags = mapMaybe (mkTag . pack . takeFileName) $ toList $ fromMaybe mempty $ lookup DoesNotExist m
-                    mkTag t = do
-                        base <- T.stripSuffix ".tar.gz" t
-                        let (x', y) = T.breakOnEnd "-" base
-                        x <- T.stripSuffix "-" x'
-                        return $ T.concat [x, "/", y]
-                let pcs = map
-                        (\tag -> proc "git" ["tag", unpack tag])
-                        tags
+                let pcs = fmap mkProcess
+                         $ maybe [] toList $ lookup DoesNotExist m
+                    mkProcess (Package _fp (PackageName name) (Version version)) =
+                         proc "git" ["tag", unpack $ concat [name, "/", version]]
                 mapM_ sayShow pcs
                 mapM_ runProcess_ pcs
         Just s -> do
             say "\nThe following packages require a version bump:"
-            mapM_ say' s
+            mapM_ sayPackage s
 
 data Status = DoesNotExist | NoChanges | NeedsVersionBump
     deriving (Show, Eq, Ord)
 
-go :: FilePath -> IO (Map Status (Set FilePath))
+go :: FilePath -> IO (Map Status (Set Package))
 go fp = do
-    let base = T.reverse $ T.drop 7 $ T.reverse $ pack $ takeFileName fp
-    let package = parsePackage $ T.unpack base
+    package <- parsePackage fp
     localFileHackage <- liftIO $ getHackageFile package
     fh <- liftIO $ doesFileExist localFileHackage
     let handleFile localFile noChanges = do
@@ -126,24 +117,41 @@ go fp = do
                             sinkFileCautious localFileHackage
                             liftIO $ handleFile localFileHackage NoChanges
                       | otherwise -> error $ "Invalid status code: " ++ show (getResponseStatus resH)
-    return $ singletonMap status $ singletonSet fp
+    return $ singletonMap status $ singletonSet package
 
-data Package = Package String String
+newtype PackageName = PackageName Text
+    deriving (Show, Eq, Ord)
+newtype Version = Version Text
+    deriving (Show, Eq, Ord)
+data Package = Package
+    { packageFile :: !FilePath
+    , _packageName :: !PackageName
+    , _packageVersion :: !Version
+    }
+    deriving (Show, Eq, Ord)
 
-parsePackage :: String -> Package
-parsePackage s =
-    Package a b
-  where
-    s' = reverse s
-    (b', a') = break (== '-') s'
-    a = reverse $ drop 1 a'
-    b = reverse b'
+parsePackage :: MonadThrow m => FilePath -> m Package
+parsePackage fp =
+    case stripSuffix ".tar.gz" $ pack $ takeFileName fp of
+        Nothing -> error $ "Does not end with .tar.gz: " ++ unpack fp
+        Just s -> do
+            let s' = reverse s
+                (b', a') = break (== '-') s'
+                a = reverse $ drop 1 a'
+                b = reverse b'
+            return $ Package fp (PackageName a) (Version b)
+
+sayPackage :: MonadIO m => Package -> m ()
+sayPackage (Package _ (PackageName name) (Version version)) = say $ concat [name, "-", version]
 
 getHackageFile :: Package -> IO FilePath
-getHackageFile (Package a b) = do
+getHackageFile (Package _fp (PackageName a') (Version b')) = do
     stack <- getAppUserDataDirectory "stack"
     return $ stack </> "indices" </> "Hackage" </> "packages" </> a </> b </>
                 concat [a, "-", b, ".tar.gz"]
+  where
+    a = unpack a'
+    b = unpack b'
 
 compareTGZ :: FilePath -> FilePath -> IO Bool
 compareTGZ a b = do
@@ -153,12 +161,12 @@ compareTGZ a b = do
   where
     getContents :: FilePath -> IO (Map FilePath LByteString)
     getContents fp = do
-        ebss <- tryAny
+        elbs <- tryAny
               $ runConduitRes
               $ sourceFile fp
              .| ungzip
-             .| sinkList -- could use tar-conduit and avoid in-memory, but it'll happen later anyway
-        case ebss of
+             .| sinkLazy -- could use tar-conduit and avoid in-memory, but it'll happen later anyway
+        case elbs of
             Left e -> do
                 say $ concat
                     [ "Error opening tarball: "
@@ -167,9 +175,7 @@ compareTGZ a b = do
                     , tshow e
                     ]
                 return mempty
-            Right bss -> do
-                l <- toList' $ Tar.read $ L.fromChunks bss
-                return $ foldMap go' l
+            Right lbs -> foldMap go' <$> toList' (Tar.read lbs)
     toList' (Tar.Next e es) = do
         l <- toList' es
         return $ e : l

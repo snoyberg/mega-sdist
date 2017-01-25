@@ -19,8 +19,6 @@ Executable mega-sdist
                      , conduit-extra
                      , http-conduit     >= 2.2.3
                      , tar
-                     , bytestring
-                     , text
                      , directory
                      , filepath
                      , typed-process
