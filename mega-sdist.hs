@@ -4,9 +4,7 @@
 import ClassyPrelude.Conduit
 import System.Directory
 import Network.HTTP.Simple
-import Network.HTTP.Types (status200, status404, status502)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
 import qualified Data.ByteString.Lazy as L
 import qualified Codec.Archive.Tar as Tar
 import Data.Conduit.Zlib (ungzip)
@@ -66,20 +64,20 @@ main = do
             Nothing -> error $ "Unexpected 'stack sdist' output in dir: " ++ dir
 
     m <- unionsWith mappend <$> mapM go tarballs
-    let say = sayString . reverse . drop 7 . reverse . takeFileName
+    let say' = sayString . reverse . drop 7 . reverse . takeFileName
 
     case lookup NoChanges m of
         Nothing -> return ()
         Just s -> do
             say "The following packages from Hackage have not changed:"
-            mapM_ say s
+            mapM_ say' s
             mapM_ removeFile s
 
     case lookup DoesNotExist m of
         Nothing -> return ()
         Just s -> do
             say "\nThe following new packages exist locally:"
-            mapM_ say s
+            mapM_ say' s
 
     case lookup NeedsVersionBump m of
         Nothing -> do
@@ -98,7 +96,7 @@ main = do
                 mapM_ runProcess_ pcs
         Just s -> do
             say "\nThe following packages require a version bump:"
-            mapM_ say s
+            mapM_ say' s
 
 data Status = DoesNotExist | NoChanges | NeedsVersionBump
     deriving (Show, Eq, Ord)
@@ -170,13 +168,13 @@ compareTGZ a b = do
                     ]
                 return mempty
             Right bss -> do
-                l <- toList $ Tar.read $ L.fromChunks bss
+                l <- toList' $ Tar.read $ L.fromChunks bss
                 return $ foldMap go' l
-    toList (Tar.Next e es) = do
-        l <- toList es
+    toList' (Tar.Next e es) = do
+        l <- toList' es
         return $ e : l
-    toList Tar.Done = return []
-    toList (Tar.Fail s) = error $ show s
+    toList' Tar.Done = return []
+    toList' (Tar.Fail s) = error $ show s
     go' e =
         case Tar.entryContent e of
             Tar.NormalFile lbs _ -> asMap $ singletonMap (Tar.entryPath e) lbs
