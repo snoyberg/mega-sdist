@@ -1,0 +1,4 @@
+resolver: nightly-2017-01-17
+extra-deps:
+- classy-prelude-1.2.0
+- classy-prelude-conduit-1.2.0
