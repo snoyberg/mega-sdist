@@ -4,7 +4,7 @@
 import ClassyPrelude.Conduit
 import System.Directory
 import Network.HTTP.Simple
-import qualified Codec.Archive.Tar as Tar
+import Data.Conduit.Tar
 import Data.Conduit.Zlib (ungzip)
 import System.Process.Typed
 import System.FilePath
@@ -14,11 +14,7 @@ import Data.Yaml (Value (..), decodeEither')
 getUrlHackage :: Package -> IO Request
 getUrlHackage (Package _fp (PackageName a) (Version b)) =
     parseRequest $ unpack $ concat
-        [ "https://s3.amazonaws.com/hackage.fpcomplete.com/packages/archive/"
-        , a
-        , "/"
-        , b
-        , "/"
+        [ "https://s3.amazonaws.com/hackage.fpcomplete.com/package/"
         , a
         , "-"
         , b
@@ -53,7 +49,7 @@ main = do
     createDirectoryIfMissing True "tarballs"
 
     tarballs <- forM dirs $ \dir -> do
-        (_, output) <- readProcess_ $ setWorkingDir dir $ proc "stack" ["sdist"]
+        (_, output) <- readProcess_ $ proc "stack" ["sdist", dir]
         case lastMay $ map unpack $ words $ decodeUtf8 output of
             Just fp -> do
                 let dest = "tarballs" </> takeFileName fp
@@ -160,28 +156,24 @@ compareTGZ a b = do
     return $ a' /= b'
   where
     getContents :: FilePath -> IO (Map FilePath LByteString)
-    getContents fp = do
-        elbs <- tryAny
-              $ runConduitRes
-              $ sourceFile fp
-             .| ungzip
-             .| sinkLazy -- could use tar-conduit and avoid in-memory, but it'll happen later anyway
-        case elbs of
-            Left e -> do
-                say $ concat
-                    [ "Error opening tarball: "
-                    , pack fp
-                    , ", "
-                    , tshow e
-                    ]
-                return mempty
-            Right lbs -> foldMap go' <$> toList' (Tar.read lbs)
-    toList' (Tar.Next e es) = do
-        l <- toList' es
-        return $ e : l
-    toList' Tar.Done = return []
-    toList' (Tar.Fail s) = error $ show s
-    go' e =
-        case Tar.entryContent e of
-            Tar.NormalFile lbs _ -> asMap $ singletonMap (Tar.entryPath e) lbs
-            _ -> mempty
+    getContents fp = handleAny (onErr fp) $ runConduitRes
+         $ sourceFile fp
+        .| ungzip
+        .| untar
+        .| withEntries addEntry
+        .| foldC
+
+    onErr fp e = do
+        say $ concat
+            [ "Error opening tarball: "
+            , pack fp
+            , ", "
+            , tshow e
+            ]
+        return mempty
+
+    addEntry header
+        | headerFileType header == FTNormal = do
+            lbs <- sinkLazy
+            yield $ asMap $ singletonMap (headerFilePath header) lbs
+        | otherwise = return ()

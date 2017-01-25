@@ -18,7 +18,7 @@ Executable mega-sdist
                      , classy-prelude-conduit >= 1.2
                      , conduit-extra
                      , http-conduit     >= 2.2.3
-                     , tar
+                     , tar-conduit
                      , directory
                      , filepath
                      , typed-process
