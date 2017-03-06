@@ -25,6 +25,8 @@ Executable mega-sdist
                      , typed-process
                      , yaml
                      , optparse-simple
+                     , temporary
+                     , bytestring
 
 source-repository head
   type:     git

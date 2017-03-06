@@ -14,6 +14,8 @@ import Data.Conduit.Binary (sinkFileCautious)
 import Data.Yaml (Value (..), decodeEither')
 import Options.Applicative.Simple
 import Paths_mega_sdist (version)
+import System.IO.Temp (withSystemTempDirectory)
+import qualified Data.ByteString.Lazy as L
 
 getUrlHackage :: Package -> IO Request
 getUrlHackage (Package _fp (PackageName a) (Version b)) =
@@ -36,6 +38,7 @@ getPaths value = maybe (error $ "getPaths failed: " ++ show value) return $ do
 
 data Args = Args
     { toTag :: !Bool
+    , getDiffs :: !Bool
     }
 
 main :: IO ()
@@ -48,6 +51,10 @@ main = do
             <$> switch
                     ( long "gittag"
                    <> help "Call 'git tag' if all versions are ready for release"
+                    )
+            <*> switch
+                    ( long "get-diffs"
+                   <> help "Display the diffs between old and new version"
                     )
         )
         empty
@@ -73,47 +80,53 @@ main = do
                 return dest
             Nothing -> error $ "Unexpected 'stack sdist' output in dir: " ++ dir
 
-    m <- unionsWith mappend <$> mapM go tarballs
+    m <- unionsWith mappend <$> mapM (go getDiffs) tarballs
 
     case lookup NoChanges m of
         Nothing -> return ()
         Just s -> do
             say "The following packages from Hackage have not changed:"
-            mapM_ sayPackage s
-            mapM_ (removeFile . packageFile) s
+            mapM_ sayPackage $ keys s
+            mapM_ (removeFile . packageFile) $ keys s
 
     case lookup DoesNotExist m of
         Nothing -> return ()
         Just s -> do
             say "\nThe following new packages exist locally:"
-            mapM_ sayPackage s
+            mapM_ sayPackage $ keys s
 
     case lookup NeedsVersionBump m of
         Nothing -> do
             say "\nNo version bumps required, good to go!"
             when toTag $ do
                 let pcs = fmap mkProcess
-                         $ maybe [] toList $ lookup DoesNotExist m
+                         $ maybe [] keys $ lookup DoesNotExist m
                     mkProcess (Package _fp (PackageName name) (Version version)) =
                          proc "git" ["tag", unpack $ concat [name, "/", version]]
                 mapM_ sayShow pcs
                 mapM_ runProcess_ pcs
         Just s -> do
             say "\nThe following packages require a version bump:"
-            mapM_ sayPackage s
+            forM_ (mapToList s) $ \(name, mdiff) -> do
+                sayPackage name
+                forM_ mdiff (L.hPut stdout)
 
 data Status = DoesNotExist | NoChanges | NeedsVersionBump
     deriving (Show, Eq, Ord)
 
-go :: FilePath -> IO (Map Status (Set Package))
-go fp = do
+type Diff = LByteString
+
+go :: Bool -- ^ get diffs
+   -> FilePath
+   -> IO (Map Status (Map Package (Maybe Diff)))
+go getDiffs fp = do
     package <- parsePackage fp
     localFileHackage <- liftIO $ getHackageFile package
     fh <- liftIO $ doesFileExist localFileHackage
     let handleFile localFile noChanges = do
-            isDiff <- compareTGZ localFile fp
-            return $ if isDiff then NeedsVersionBump else noChanges
-    status <-
+            (isDiff, mdiff) <- compareTGZ getDiffs localFile fp
+            return $ if isDiff then (NeedsVersionBump, mdiff) else (noChanges, Nothing)
+    (status, mdiff) <-
         case () of
             ()
                 | fh -> handleFile localFileHackage NoChanges
@@ -122,14 +135,14 @@ go fp = do
                     runResourceT $ httpSink reqH $ \resH -> do
                     case () of
                      ()
-                      | getResponseStatusCode resH == 404 -> return DoesNotExist
-                      | getResponseStatusCode resH == 403 -> return DoesNotExist
+                      | getResponseStatusCode resH == 404 -> return (DoesNotExist, Nothing)
+                      | getResponseStatusCode resH == 403 -> return (DoesNotExist, Nothing)
                       | getResponseStatusCode resH == 200 -> do
                             liftIO $ createDirectoryIfMissing True $ takeDirectory localFileHackage
                             sinkFileCautious localFileHackage
                             liftIO $ handleFile localFileHackage NoChanges
                       | otherwise -> error $ "Invalid status code: " ++ show (getResponseStatus resH)
-    return $ singletonMap status $ singletonSet package
+    return $ singletonMap status $ singletonMap package mdiff
 
 newtype PackageName = PackageName Text
     deriving (Show, Eq, Ord)
@@ -165,11 +178,25 @@ getHackageFile (Package _fp (PackageName a') (Version b')) = do
     a = unpack a'
     b = unpack b'
 
-compareTGZ :: FilePath -> FilePath -> IO Bool
-compareTGZ a b = do
+compareTGZ :: Bool -- ^ get diffs?
+           -> FilePath -> FilePath -> IO (Bool, Maybe Diff)
+compareTGZ getDiffs a b = do
     a' <- getContents a
     b' <- getContents b
-    return $ a' /= b'
+    let isDiff = a' /= b'
+    mdiff <-
+        if getDiffs && isDiff
+            then withSystemTempDirectory "diff" $ \diff -> do
+                let fill dir x = forM_ (mapToList (asMap x)) $ \(fp, bs) -> do
+                      let fp' = dir </> fp
+                      createDirectoryIfMissing True $ takeDirectory fp'
+                      L.writeFile fp' bs
+                fill (diff </> "old") a'
+                fill (diff </> "new") b'
+                (_, out, _) <- readProcess $ setWorkingDir diff $ proc "diff" ["-r", "old", "new"]
+                return $ Just out
+            else return Nothing
+    return (a' /= b', mdiff)
   where
     getContents :: FilePath -> IO (Map FilePath LByteString)
     getContents fp = handleAny (onErr fp) $ runConduitRes
