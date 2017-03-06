@@ -1,6 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE TemplateHaskell #-}
 import ClassyPrelude.Conduit
 import System.Directory
 import Network.HTTP.Simple
@@ -10,6 +12,8 @@ import System.Process.Typed
 import System.FilePath
 import Data.Conduit.Binary (sinkFileCautious)
 import Data.Yaml (Value (..), decodeEither')
+import Options.Applicative.Simple
+import Paths_mega_sdist (version)
 
 getUrlHackage :: Package -> IO Request
 getUrlHackage (Package _fp (PackageName a) (Version b)) =
@@ -30,11 +34,23 @@ getPaths value = maybe (error $ "getPaths failed: " ++ show value) return $ do
         String path <- lookup "path" o
         return $ unpack path
 
+data Args = Args
+    { toTag :: !Bool
+    }
+
 main :: IO ()
 main = do
-    args <- getArgs
-
-    let toTag = "--gittag" `elem` args
+    (Args {..}, ()) <- simpleOptions
+        $(simpleVersion version)
+        "Check Haskell cabal package versions in a mega-repo"
+        "Determines if the code present in this repo is the most current with Hackage"
+        (Args
+            <$> switch
+                    ( long "gittag"
+                   <> help "Call 'git tag' if all versions are ready for release"
+                    )
+        )
+        empty
 
     (queryBS, _) <- readProcess_ $ proc "stack" ["query"]
     queryValue <-
