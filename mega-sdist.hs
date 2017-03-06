@@ -42,8 +42,8 @@ main = do
             Left e -> error $ "Could not parse 'stack query': " ++ show e
             Right x -> return x
     allDirs <- getPaths queryValue
-    myPath <- canonicalizePath "."
-    let dirs = filter (myPath `isPrefixOf`) allDirs
+    myPath <- addTrailingPathSeparator <$> canonicalizePath "."
+    let dirs = filter (myPath `isPrefixOf`) (map addTrailingPathSeparator allDirs)
 
     whenM (doesDirectoryExist "tarballs") $ removeDirectoryRecursive "tarballs"
     createDirectoryIfMissing True "tarballs"
