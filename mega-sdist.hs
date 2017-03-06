@@ -39,6 +39,7 @@ getPaths value = maybe (error $ "getPaths failed: " ++ show value) return $ do
 data Args = Args
     { toTag :: !Bool
     , getDiffs :: !Bool
+    , rawDirs :: ![FilePath]
     }
 
 main :: IO ()
@@ -56,6 +57,9 @@ main = do
                     ( long "get-diffs"
                    <> help "Display the diffs between old and new version"
                     )
+            <*> many
+                    ( strArgument (metavar "DIR")
+                    )
         )
         empty
 
@@ -65,8 +69,12 @@ main = do
             Left e -> error $ "Could not parse 'stack query': " ++ show e
             Right x -> return x
     allDirs <- getPaths queryValue
-    myPath <- addTrailingPathSeparator <$> canonicalizePath "."
-    let dirs = filter (myPath `isPrefixOf`) (map addTrailingPathSeparator allDirs)
+    dirs <-
+      if null rawDirs
+        then return allDirs
+        else do
+          myPaths <- mapM (fmap addTrailingPathSeparator . canonicalizePath) rawDirs
+          return $ filter (\y -> any (\x -> (x `isPrefixOf` y)) myPaths) (map addTrailingPathSeparator allDirs)
 
     whenM (doesDirectoryExist "tarballs") $ removeDirectoryRecursive "tarballs"
     createDirectoryIfMissing True "tarballs"
