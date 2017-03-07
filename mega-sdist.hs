@@ -131,12 +131,12 @@ go getDiffs fp = do
     package <- parsePackage fp
     localFileHackage <- liftIO $ getHackageFile package
     localFileExists <- liftIO $ doesFileExist localFileHackage
-    let handleFile localFile noChanges = do
+    let handleFile localFile = do
             (isDiff, mdiff) <- compareTGZ getDiffs localFile fp
-            return $ if isDiff then (NeedsVersionBump, mdiff) else (noChanges, Nothing)
+            return $ if isDiff then (NeedsVersionBump, mdiff) else (NoChanges, Nothing)
     (status, mdiff) <-
         if localFileExists
-            then handleFile localFileHackage NoChanges
+            then handleFile localFileHackage
             else do
                 reqH <- getUrlHackage package
                 runResourceT $ httpSink reqH $ \resH -> do
@@ -147,7 +147,7 @@ go getDiffs fp = do
                     | getResponseStatusCode resH == 200 -> do
                         liftIO $ createDirectoryIfMissing True $ takeDirectory localFileHackage
                         sinkFileCautious localFileHackage
-                        liftIO $ handleFile localFileHackage NoChanges
+                        liftIO $ handleFile localFileHackage
                     | otherwise -> error $ "Invalid status code: " ++ show (getResponseStatus resH)
     return $ singletonMap status $ singletonMap package mdiff
 
