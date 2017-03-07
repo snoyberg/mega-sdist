@@ -130,26 +130,25 @@ go :: Bool -- ^ get diffs
 go getDiffs fp = do
     package <- parsePackage fp
     localFileHackage <- liftIO $ getHackageFile package
-    fh <- liftIO $ doesFileExist localFileHackage
+    localFileExists <- liftIO $ doesFileExist localFileHackage
     let handleFile localFile noChanges = do
             (isDiff, mdiff) <- compareTGZ getDiffs localFile fp
             return $ if isDiff then (NeedsVersionBump, mdiff) else (noChanges, Nothing)
     (status, mdiff) <-
-        case () of
-            ()
-                | fh -> handleFile localFileHackage NoChanges
-                | otherwise -> do
-                    reqH <- getUrlHackage package
-                    runResourceT $ httpSink reqH $ \resH -> do
-                    case () of
-                     ()
-                      | getResponseStatusCode resH == 404 -> return (DoesNotExist, Nothing)
-                      | getResponseStatusCode resH == 403 -> return (DoesNotExist, Nothing)
-                      | getResponseStatusCode resH == 200 -> do
-                            liftIO $ createDirectoryIfMissing True $ takeDirectory localFileHackage
-                            sinkFileCautious localFileHackage
-                            liftIO $ handleFile localFileHackage NoChanges
-                      | otherwise -> error $ "Invalid status code: " ++ show (getResponseStatus resH)
+        if localFileExists
+            then handleFile localFileHackage NoChanges
+            else do
+                reqH <- getUrlHackage package
+                runResourceT $ httpSink reqH $ \resH -> do
+                case () of
+                  ()
+                    | getResponseStatusCode resH `elem` [403, 404] -> return (DoesNotExist, Nothing)
+                    | getResponseStatusCode resH == 403 -> return (DoesNotExist, Nothing)
+                    | getResponseStatusCode resH == 200 -> do
+                        liftIO $ createDirectoryIfMissing True $ takeDirectory localFileHackage
+                        sinkFileCautious localFileHackage
+                        liftIO $ handleFile localFileHackage NoChanges
+                    | otherwise -> error $ "Invalid status code: " ++ show (getResponseStatus resH)
     return $ singletonMap status $ singletonMap package mdiff
 
 newtype PackageName = PackageName Text
