@@ -16,6 +16,10 @@ import Options.Applicative.Simple
 import Paths_mega_sdist (version)
 import System.IO.Temp (withSystemTempDirectory)
 import qualified Data.ByteString.Lazy as L
+import Data.Semigroup (Max (..), Option (..))
+import qualified Data.Version
+import Text.ParserCombinators.ReadP (readP_to_S)
+import qualified Data.Text as T
 
 getUrlHackage :: Package -> IO Request
 getUrlHackage (Package _fp (PackageName a) (Version b)) =
@@ -101,7 +105,9 @@ main = do
         Nothing -> return ()
         Just s -> do
             say "\nThe following new packages exist locally:"
-            mapM_ sayPackage $ keys s
+            forM_ (mapToList s) $ \(name, mdiff) -> do
+                sayPackage name
+                forM_ mdiff (L.hPut stdout)
 
     case lookup NeedsVersionBump m of
         Nothing -> do
@@ -131,36 +137,91 @@ go getDiffs fp = do
     package <- parsePackage fp
     localFileHackage <- liftIO $ getHackageFile package
     localFileExists <- liftIO $ doesFileExist localFileHackage
-    let handleFile localFile = do
-            (isDiff, mdiff) <- compareTGZ getDiffs localFile fp
+    let handleFile = do
+            let v = packageVersion package
+            (isDiff, mdiff) <- compareTGZ getDiffs (packageName package) localFileHackage v fp v
             return $ if isDiff then (NeedsVersionBump, mdiff) else (NoChanges, Nothing)
     (status, mdiff) <-
         if localFileExists
-            then handleFile localFileHackage
+            then handleFile
             else do
                 reqH <- getUrlHackage package
                 runResourceT $ httpSink reqH $ \resH -> do
                 case () of
                   ()
-                    | getResponseStatusCode resH `elem` [403, 404] -> return (DoesNotExist, Nothing)
+                    | getResponseStatusCode resH `elem` [403, 404] -> do
+                        mdiff <-
+                          if getDiffs
+                            then do
+                                mlatest <- getLatestVersion (packageName package)
+                                case mlatest of
+                                  Nothing -> return Nothing
+                                  Just (latest, latestv) -> do
+                                    (isDiff, mdiff) <- liftIO $ compareTGZ getDiffs (packageName package) latest latestv fp (packageVersion package)
+                                    return $ if isDiff then mdiff else Nothing
+                            else return Nothing
+                        return (DoesNotExist, mdiff)
                     | getResponseStatusCode resH == 403 -> return (DoesNotExist, Nothing)
                     | getResponseStatusCode resH == 200 -> do
                         liftIO $ createDirectoryIfMissing True $ takeDirectory localFileHackage
                         sinkFileCautious localFileHackage
-                        liftIO $ handleFile localFileHackage
+                        liftIO handleFile
                     | otherwise -> error $ "Invalid status code: " ++ show (getResponseStatus resH)
     return $ singletonMap status $ singletonMap package mdiff
 
-newtype PackageName = PackageName Text
+-- | Get the filepath for the latest version of a package from
+-- Hackage, if it exists at all.
+getLatestVersion :: MonadIO m => PackageName -> m (Maybe (FilePath, Version))
+getLatestVersion name = liftIO $ do
+    stack <- getAppUserDataDirectory "stack"
+    let index = stack </> "indices" </> "Hackage" </> "00-index.tar"
+    mversion <- runConduitRes
+        $ sourceFile index
+       .| untar
+       .| withEntries yield
+       .| foldMapC (parseVersionNumber name)
+    case mversion of
+        Option Nothing -> return Nothing
+        Option (Just (Max version)) -> do
+            let p = Package "" name $ toTextVersion version
+            fp <- liftIO $ getHackageFile p
+            req <- liftIO $ getUrlHackage p
+            runResourceT $ httpSink req $ \res ->
+              if getResponseStatusCode res == 200
+                then do
+                  liftIO $ createDirectoryIfMissing True $ takeDirectory fp
+                  sinkFileCautious fp
+                  return $ Just (fp, toTextVersion version)
+                else error $ "Could not download from Hackage: " ++ show p
+
+newtype PackageName = PackageName { unPackageName :: Text }
     deriving (Show, Eq, Ord)
-newtype Version = Version Text
+newtype Version = Version { unVersion :: Text }
     deriving (Show, Eq, Ord)
 data Package = Package
     { packageFile :: !FilePath
-    , _packageName :: !PackageName
-    , _packageVersion :: !Version
+    , packageName :: !PackageName
+    , packageVersion :: !Version
     }
     deriving (Show, Eq, Ord)
+
+toTextVersion :: Data.Version.Version -> Version
+toTextVersion = Version . pack . Data.Version.showVersion
+
+parseVersionNumber :: PackageName
+                   -- ^ target package we care about
+                   -> Header
+                   -> Option (Max Data.Version.Version)
+parseVersionNumber pn header = Option $ fmap Max $ do
+    [name, version, dotcabal] <- Just $ T.splitOn "/" $ pack fp
+    guard $ PackageName name == pn
+    guard $ name ++ ".cabal" == dotcabal
+    listToMaybe $ map fst
+                $ filter (null . snd)
+                $ readP_to_S Data.Version.parseVersion
+                $ unpack version
+  where
+    fp = headerFilePath header
 
 parsePackage :: MonadThrow m => FilePath -> m Package
 parsePackage fp =
@@ -186,8 +247,17 @@ getHackageFile (Package _fp (PackageName a') (Version b')) = do
     b = unpack b'
 
 compareTGZ :: Bool -- ^ get diffs?
-           -> FilePath -> FilePath -> IO (Bool, Maybe Diff)
-compareTGZ getDiffs a b = do
+           -> PackageName
+           -> FilePath
+           -- ^ old tarball
+           -> Version
+           -- ^ old version
+           -> FilePath
+           -- ^ new tarball
+           -> Version
+           -- ^ new version
+           -> IO (Bool, Maybe Diff)
+compareTGZ getDiffs pn a av b bv = do
     a' <- getContents a
     b' <- getContents b
     let isDiff = a' /= b'
@@ -200,7 +270,16 @@ compareTGZ getDiffs a b = do
                       L.writeFile fp' bs
                 fill (diff </> "old") a'
                 fill (diff </> "new") b'
-                (_, out, _) <- readProcess $ setWorkingDir diff $ proc "diff" ["-r", "old", "new"]
+                let toNV v = concat
+                        [ unpack (unPackageName pn)
+                        , "-"
+                        , unpack (unVersion v)
+                        ]
+                (_, out, _) <- readProcess $ setWorkingDir diff $ proc "diff"
+                    [ "-r"
+                    , "old" </> toNV av
+                    , "new" </> toNV bv
+                    ]
                 return $ Just out
             else return Nothing
     return (a' /= b', mdiff)

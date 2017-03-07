@@ -1,5 +1,5 @@
 Name:                mega-sdist
-Version:             0.3.0.2
+Version:             0.3.0.3
 Synopsis:            Handles uploading to Hackage from mega repos
 Description:         See README.md
 Homepage:            https://github.com/snoyberg/mega-sdist
@@ -27,6 +27,7 @@ Executable mega-sdist
                      , optparse-simple
                      , temporary
                      , bytestring
+                     , text
 
 source-repository head
   type:     git

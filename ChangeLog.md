@@ -1,3 +1,7 @@
+## 0.3.0.3
+
+* Diffs against previous versions
+
 ## 0.3.0.2
 
 * Switch to optparse-simple
