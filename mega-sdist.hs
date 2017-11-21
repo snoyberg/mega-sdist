@@ -12,8 +12,8 @@ import System.Process.Typed
 import System.FilePath
 import Data.Conduit.Binary (sinkFileCautious)
 import Data.Yaml (Value (..), decodeEither')
-import Options.Applicative.Simple
-import Paths_mega_sdist (version)
+import Options.Applicative.Simple hiding (header, value)
+import qualified Paths_mega_sdist as Paths (version)
 import System.IO.Temp (withSystemTempDirectory)
 import qualified Data.ByteString.Lazy as L
 import Data.Semigroup (Max (..), Option (..))
@@ -49,7 +49,7 @@ data Args = Args
 main :: IO ()
 main = do
     (Args {..}, ()) <- simpleOptions
-        $(simpleVersion version)
+        $(simpleVersion Paths.version)
         "Check Haskell cabal package versions in a mega-repo"
         "Determines if the code present in this repo is the most current with Hackage"
         (Args
@@ -145,8 +145,8 @@ go getDiffs fp = do
         if localFileExists
             then handleFile
             else do
-                reqH <- getUrlHackage package
-                runResourceT $ httpSink reqH $ \resH -> do
+              reqH <- getUrlHackage package
+              runResourceT $ httpSink reqH $ \resH -> do
                 case () of
                   ()
                     | getResponseStatusCode resH `elem` [403, 404] -> do
@@ -174,9 +174,9 @@ go getDiffs fp = do
 getLatestVersion :: MonadIO m => PackageName -> m (Maybe (FilePath, Version))
 getLatestVersion name = liftIO $ do
     stack <- getAppUserDataDirectory "stack"
-    let index = stack </> "indices" </> "Hackage" </> "00-index.tar"
+    let indexTar = stack </> "indices" </> "Hackage" </> "00-index.tar"
     mversion <- runConduitRes
-        $ sourceFile index
+        $ sourceFile indexTar
        .| untar
        .| withEntries yield
        .| foldMapC (parseVersionNumber name)
