@@ -14,6 +14,7 @@ import Data.Conduit.Binary (sinkFileCautious)
 import Data.Yaml (Value (..), decodeEither')
 import Options.Applicative.Simple hiding (header, value)
 import qualified Paths_mega_sdist as Paths (version)
+import System.IO (hIsTerminalDevice)
 import System.IO.Temp (withSystemTempDirectory)
 import qualified Data.ByteString.Lazy as L
 import Data.Semigroup (Max (..), Option (..))
@@ -101,13 +102,15 @@ main = do
             mapM_ sayPackage $ keys s
             mapM_ (removeFile . packageFile) $ keys s
 
+    toColor <- hIsTerminalDevice stdout
+
     case lookup DoesNotExist m of
         Nothing -> return ()
         Just s -> do
             say "\nThe following new packages exist locally:"
             forM_ (mapToList s) $ \(name, mdiff) -> do
                 sayPackage name
-                forM_ mdiff (L.hPut stdout)
+                sayDiff toColor mdiff
 
     case lookup NeedsVersionBump m of
         Nothing -> do
@@ -123,7 +126,11 @@ main = do
             say "\nThe following packages require a version bump:"
             forM_ (mapToList s) $ \(name, mdiff) -> do
                 sayPackage name
-                forM_ mdiff (L.hPut stdout)
+                sayDiff toColor mdiff
+
+sayDiff :: Bool -- ^ use color?
+        -> Maybe Diff -> IO ()
+sayDiff toColor = mapM_ $ L.hPut stdout . (if toColor then colorize else id)
 
 data Status = DoesNotExist | NoChanges | NeedsVersionBump
     deriving (Show, Eq, Ord)
@@ -276,7 +283,7 @@ compareTGZ getDiffs pn a av b bv = do
                         , unpack (unVersion v)
                         ]
                 (_, out, _) <- readProcess $ setWorkingDir diff $ proc "diff"
-                    [ "-r"
+                    [ "-ru"
                     , "old" </> toNV av
                     , "new" </> toNV bv
                     ]
@@ -306,3 +313,24 @@ compareTGZ getDiffs pn a av b bv = do
             lbs <- sinkLazy
             yield $ asMap $ singletonMap (headerFilePath header) lbs
         | otherwise = return ()
+
+colorize :: LByteString -> LByteString
+colorize =
+    intercalate "\n" . map colorLine . L.split 10
+  where
+    colorLine :: LByteString -> LByteString
+    colorLine l =
+      case (toEnum . fromEnum) <$> headMay l of
+        Just '-' -> add "31" l
+        Just '+' -> add "32" l
+        Just '@' -> add "34" l
+        _ -> l
+
+    add :: LByteString -> LByteString -> LByteString
+    add color l = concat
+      [ "\x1b["
+      , color
+      , "m"
+      , l
+      , "\x1b[0m"
+      ]

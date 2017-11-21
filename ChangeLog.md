@@ -1,6 +1,7 @@
 ## 0.3.0.4
 
 * Warning cleanup
+* Colorize diffs
 
 ## 0.3.0.3
 
