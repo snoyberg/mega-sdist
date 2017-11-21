@@ -1,0 +1,32 @@
+name:        mega-sdist
+version:     '0.3.0.3'
+synopsis:    Handles uploading to Hackage from mega repos
+description: See README.md
+category:    Distribution
+author:      Michael Snoyman
+maintainer:  michael@snoyman.com
+license:     MIT
+github:      snoyberg/mega-sdist
+
+extra-source-files:
+- README.md
+- ChangeLog.md
+
+dependencies:
+- base >=4 && <5
+- bytestring
+- classy-prelude-conduit >=1.2
+- conduit-extra
+- directory
+- filepath
+- http-conduit >=2.2.3
+- optparse-simple
+- tar-conduit
+- temporary
+- text
+- typed-process
+- yaml
+
+executables:
+  mega-sdist:
+    main: mega-sdist.hs
