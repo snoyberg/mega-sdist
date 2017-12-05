@@ -1,3 +1,7 @@
+## 0.3.0.5
+
+* Add `-N` to `diff` arguments
+
 ## 0.3.0.4
 
 * Warning cleanup

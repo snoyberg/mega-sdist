@@ -283,7 +283,7 @@ compareTGZ getDiffs pn a av b bv = do
                         , unpack (unVersion v)
                         ]
                 (_, out, _) <- readProcess $ setWorkingDir diff $ proc "diff"
-                    [ "-ru"
+                    [ "-ruN"
                     , "old" </> toNV av
                     , "new" </> toNV bv
                     ]
