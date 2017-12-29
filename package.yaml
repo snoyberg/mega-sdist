@@ -1,5 +1,5 @@
 name:        mega-sdist
-version:     0.3.0.5
+version:     0.3.0.6
 synopsis:    Handles uploading to Hackage from mega repos
 description: See README.md
 category:    Distribution
