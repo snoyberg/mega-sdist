@@ -119,7 +119,9 @@ main = do
                 let pcs = fmap mkProcess
                          $ maybe [] keys $ lookup DoesNotExist m
                     mkProcess (Package _fp (PackageName name) (Version version)) =
-                         proc "git" ["tag", unpack $ concat [name, "/", version]]
+                      let ident = concat [name, "-", version]
+                          msg = "Release: " ++ ident
+                       in proc "git" ["tag", "-s", unpack ident, "-m", unpack msg]
                 mapM_ sayShow pcs
                 mapM_ runProcess_ pcs
         Just s -> do

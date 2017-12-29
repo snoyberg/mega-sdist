@@ -1,3 +1,8 @@
+## 0.3.0.6
+
+* Change tag format to name-version
+* Tags are signed
+
 ## 0.3.0.5
 
 * Add `-N` to `diff` arguments

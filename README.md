@@ -27,9 +27,9 @@ repository.
 This utility is highly opinionated in some ways, e.g.:
 
 * It only supports one style of Git tag name:
-  `packagename/version`. This may look weird in non-mega-repos, where
-  `v1.2.3` looks better than `foo/1.2.3`, but for mega-repos the
-  former doesn't make sense.
+  `packagename-version`. This may look weird in non-mega-repos, where
+  `v1.2.3` looks better than `foo-1.2.3`, but for mega-repos the
+  former doesn't make sense. It also requires tag signing.
 * It depends on Stack for both discovering all of your local packages,
   and for uploading to Hackage.
 
@@ -187,7 +187,7 @@ The following new packages exist locally:
 monad-unlift-0.2.1
 
 No version bumps required, good to go!
-Raw command: git tag monad-unlift/0.2.1
+Raw command: git tag -s monad-unlift-0.2.1 -m "Release: monad-unlift-0.2.1"
 ```
 
 And suddenly I notice something new:
