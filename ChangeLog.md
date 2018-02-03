@@ -1,3 +1,7 @@
+## 0.3.1
+
+* Switch to tar-conduit 0.2
+
 ## 0.3.0.6
 
 * Change tag format to name-version

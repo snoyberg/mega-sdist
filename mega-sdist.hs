@@ -186,7 +186,7 @@ getLatestVersion name = liftIO $ do
     let indexTar = stack </> "indices" </> "Hackage" </> "00-index.tar"
     mversion <- runConduitRes
         $ sourceFile indexTar
-       .| untar
+       .| untarChunks
        .| withEntries yield
        .| foldMapC (parseVersionNumber name)
     case mversion of
@@ -297,7 +297,7 @@ compareTGZ getDiffs pn a av b bv = do
     getContents fp = handleAny (onErr fp) $ runConduitRes
          $ sourceFile fp
         .| ungzip
-        .| untar
+        .| untarChunks
         .| withEntries addEntry
         .| foldC
 
