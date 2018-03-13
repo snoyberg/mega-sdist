@@ -1,3 +1,7 @@
+## 0.3.2
+
+* Switch to rio and LTS 11
+
 ## 0.3.1
 
 * Switch to tar-conduit 0.2

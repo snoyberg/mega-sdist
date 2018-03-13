@@ -3,28 +3,41 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TemplateHaskell #-}
-import ClassyPrelude.Conduit
-import System.Directory
+import RIO
+import Conduit
+import RIO.Directory
+import RIO.FilePath
+import qualified RIO.Map as Map
+import qualified RIO.HashMap as HM
 import Network.HTTP.Simple
 import Data.Conduit.Tar
 import Data.Conduit.Zlib (ungzip)
-import System.Process.Typed
-import System.FilePath
+import RIO.Process
 import Data.Conduit.Binary (sinkFileCautious)
 import Data.Yaml (Value (..), decodeEither')
 import Options.Applicative.Simple hiding (header, value)
 import qualified Paths_mega_sdist as Paths (version)
-import System.IO (hIsTerminalDevice)
-import System.IO.Temp (withSystemTempDirectory)
-import qualified Data.ByteString.Lazy as L
+import qualified RIO.ByteString.Lazy as BL
+import qualified Data.ByteString.Lazy.Char8 as BL8
 import Data.Semigroup (Max (..), Option (..))
 import qualified Data.Version
 import Text.ParserCombinators.ReadP (readP_to_S)
-import qualified Data.Text as T
+import qualified RIO.Text as T
+import qualified RIO.List as L
+import RIO.Text.Partial (splitOn)
 
-getUrlHackage :: Package -> IO Request
+data App = App
+  { appLogFunc :: !LogFunc
+  , appProcessContext :: !ProcessContext
+  }
+instance HasLogFunc App where
+  logFuncL = lens appLogFunc (\x y -> x { appLogFunc = y })
+instance HasProcessContext App where
+  processContextL = lens appProcessContext (\x y -> x { appProcessContext = y })
+
+getUrlHackage :: MonadIO m => Package -> m Request
 getUrlHackage (Package _fp (PackageName a) (Version b)) =
-    parseRequest $ unpack $ concat
+    liftIO $ parseRequest $ T.unpack $ mconcat
         [ "https://s3.amazonaws.com/hackage.fpcomplete.com/package/"
         , a
         , "-"
@@ -32,24 +45,25 @@ getUrlHackage (Package _fp (PackageName a) (Version b)) =
         , ".tar.gz"
         ]
 
-getPaths :: Value -> IO [FilePath]
+getPaths :: MonadIO m => Value -> m [FilePath]
 getPaths value = maybe (error $ "getPaths failed: " ++ show value) return $ do
     Object top <- return value
-    Object locals <- lookup "locals" top
+    Object locals <- HM.lookup "locals" top
     forM (toList locals) $ \l -> do
         Object o <- return l
-        String path <- lookup "path" o
-        return $ unpack path
+        String path <- HM.lookup "path" o
+        return $ T.unpack path
 
 data Args = Args
     { toTag :: !Bool
     , getDiffs :: !Bool
     , rawDirs :: ![FilePath]
+    , verbose :: !Bool
     }
 
 main :: IO ()
 main = do
-    (Args {..}, ()) <- simpleOptions
+    (args@Args {..}, ()) <- simpleOptions
         $(simpleVersion Paths.version)
         "Check Haskell cabal package versions in a mega-repo"
         "Determines if the code present in this repo is the most current with Hackage"
@@ -65,12 +79,27 @@ main = do
             <*> many
                     ( strArgument (metavar "DIR")
                     )
+            <*> switch
+                    ( long "verbose"
+                   <> help "Enable verbose output"
+                    )
         )
         empty
 
-    (queryBS, _) <- readProcess_ $ proc "stack" ["query"]
+    lo <- logOptionsHandle stdout verbose
+    pc <- mkDefaultProcessContext
+    withLogFunc lo $ \lf -> do
+      let app = App
+            { appLogFunc = lf
+            , appProcessContext = pc
+            }
+      runRIO app $ main2 args
+
+main2 :: Args -> RIO App ()
+main2 Args {..} = do
+    (queryBS, _) <- proc "stack" ["query"] readProcess_
     queryValue <-
-        case decodeEither' (toStrict queryBS) of
+        case decodeEither' (BL.toStrict queryBS) of
             Left e -> error $ "Could not parse 'stack query': " ++ show e
             Right x -> return x
     allDirs <- getPaths queryValue
@@ -79,60 +108,60 @@ main = do
         then return allDirs
         else do
           myPaths <- mapM (fmap addTrailingPathSeparator . canonicalizePath) rawDirs
-          return $ filter (\y -> any (\x -> (x `isPrefixOf` y)) myPaths) (map addTrailingPathSeparator allDirs)
+          return $ filter (\y -> any (\x -> (x `L.isPrefixOf` y)) myPaths) (map addTrailingPathSeparator allDirs)
 
     whenM (doesDirectoryExist "tarballs") $ removeDirectoryRecursive "tarballs"
     createDirectoryIfMissing True "tarballs"
 
     tarballs <- forM dirs $ \dir -> do
-        (_, output) <- readProcess_ $ proc "stack" ["sdist", dir]
-        case lastMay $ map unpack $ words $ decodeUtf8 output of
-            Just fp -> do
+        output <- proc "stack" ["sdist", dir] readProcessStderr_
+        case decodeUtf8' $ BL.toStrict output of
+          Left e -> error $ "Invalid non-UTF8 output: " ++ show e
+          Right text -> case reverse $ map T.unpack $ T.words text of
+            fp:_ -> do
                 let dest = "tarballs" </> takeFileName fp
                 renameFile fp dest
                 return dest
-            Nothing -> error $ "Unexpected 'stack sdist' output in dir: " ++ dir
+            [] -> error $ "Unexpected 'stack sdist' output in dir: " ++ dir
 
-    m <- unionsWith mappend <$> mapM (go getDiffs) tarballs
+    m <- Map.unionsWith mappend <$> mapM (go getDiffs) tarballs
 
-    case lookup NoChanges m of
+    case Map.lookup NoChanges m of
         Nothing -> return ()
         Just s -> do
-            say "The following packages from Hackage have not changed:"
-            mapM_ sayPackage $ keys s
-            mapM_ (removeFile . packageFile) $ keys s
+            logInfo "The following packages from Hackage have not changed:"
+            mapM_ sayPackage $ Map.keys s
+            mapM_ (removeFile . packageFile) $ Map.keys s
 
     toColor <- hIsTerminalDevice stdout
 
-    case lookup DoesNotExist m of
+    case Map.lookup DoesNotExist m of
         Nothing -> return ()
         Just s -> do
-            say "\nThe following new packages exist locally:"
-            forM_ (mapToList s) $ \(name, mdiff) -> do
+            logInfo "\nThe following new packages exist locally:"
+            forM_ (Map.toList s) $ \(name, mdiff) -> do
                 sayPackage name
                 sayDiff toColor mdiff
 
-    case lookup NeedsVersionBump m of
+    case Map.lookup NeedsVersionBump m of
         Nothing -> do
-            say "\nNo version bumps required, good to go!"
-            when toTag $ do
-                let pcs = fmap mkProcess
-                         $ maybe [] keys $ lookup DoesNotExist m
-                    mkProcess (Package _fp (PackageName name) (Version version)) =
-                      let ident = concat [name, "-", version]
-                          msg = "Release: " ++ ident
-                       in proc "git" ["tag", "-s", unpack ident, "-m", unpack msg]
-                mapM_ sayShow pcs
-                mapM_ runProcess_ pcs
+            logInfo "\nNo version bumps required, good to go!"
+            when toTag $ forM_ (maybe [] Map.keys $ Map.lookup DoesNotExist m)
+              $ \(Package _fp (PackageName name) (Version version)) ->
+                let ident = T.unpack $ mconcat [name, "-", version]
+                    msg = "Release: " <> ident
+                 in proc "git" ["tag", "-s", ident, "-m", msg] $ \pc -> do
+                      logInfo $ displayShow pc
+                      runProcess_ pc
         Just s -> do
-            say "\nThe following packages require a version bump:"
-            forM_ (mapToList s) $ \(name, mdiff) -> do
+            logInfo "\nThe following packages require a version bump:"
+            forM_ (Map.toList s) $ \(name, mdiff) -> do
                 sayPackage name
                 sayDiff toColor mdiff
 
 sayDiff :: Bool -- ^ use color?
-        -> Maybe Diff -> IO ()
-sayDiff toColor = mapM_ $ L.hPut stdout . (if toColor then colorize else id)
+        -> Maybe Diff -> RIO App ()
+sayDiff toColor = mapM_ $ BL.hPut stdout . (if toColor then colorize else id)
 
 data Status = DoesNotExist | NoChanges | NeedsVersionBump
     deriving (Show, Eq, Ord)
@@ -141,12 +170,13 @@ type Diff = LByteString
 
 go :: Bool -- ^ get diffs
    -> FilePath
-   -> IO (Map Status (Map Package (Maybe Diff)))
+   -> RIO App (Map Status (Map Package (Maybe Diff)))
 go getDiffs fp = do
     package <- parsePackage fp
-    localFileHackage <- liftIO $ getHackageFile package
-    localFileExists <- liftIO $ doesFileExist localFileHackage
-    let handleFile = do
+    localFileHackage <- getHackageFile package
+    localFileExists <- doesFileExist localFileHackage
+    let handleFile :: RIO App (Status, Maybe Diff)
+        handleFile = do
             let v = packageVersion package
             (isDiff, mdiff) <- compareTGZ getDiffs (packageName package) localFileHackage v fp v
             return $ if isDiff then (NeedsVersionBump, mdiff) else (NoChanges, Nothing)
@@ -166,7 +196,7 @@ go getDiffs fp = do
                                 case mlatest of
                                   Nothing -> return Nothing
                                   Just (latest, latestv) -> do
-                                    (isDiff, mdiff) <- liftIO $ compareTGZ getDiffs (packageName package) latest latestv fp (packageVersion package)
+                                    (isDiff, mdiff) <- lift $ lift $ compareTGZ getDiffs (packageName package) latest latestv fp (packageVersion package)
                                     return $ if isDiff then mdiff else Nothing
                             else return Nothing
                         return (DoesNotExist, mdiff)
@@ -174,9 +204,9 @@ go getDiffs fp = do
                     | getResponseStatusCode resH == 200 -> do
                         liftIO $ createDirectoryIfMissing True $ takeDirectory localFileHackage
                         sinkFileCautious localFileHackage
-                        liftIO handleFile
+                        lift $ lift handleFile
                     | otherwise -> error $ "Invalid status code: " ++ show (getResponseStatus resH)
-    return $ singletonMap status $ singletonMap package mdiff
+    return $ Map.singleton status $ Map.singleton package mdiff
 
 -- | Get the filepath for the latest version of a package from
 -- Hackage, if it exists at all.
@@ -193,8 +223,8 @@ getLatestVersion name = liftIO $ do
         Option Nothing -> return Nothing
         Option (Just (Max version)) -> do
             let p = Package "" name $ toTextVersion version
-            fp <- liftIO $ getHackageFile p
-            req <- liftIO $ getUrlHackage p
+            fp <- getHackageFile p
+            req <- getUrlHackage p
             runResourceT $ httpSink req $ \res ->
               if getResponseStatusCode res == 200
                 then do
@@ -215,45 +245,46 @@ data Package = Package
     deriving (Show, Eq, Ord)
 
 toTextVersion :: Data.Version.Version -> Version
-toTextVersion = Version . pack . Data.Version.showVersion
+toTextVersion = Version . T.pack . Data.Version.showVersion
 
 parseVersionNumber :: PackageName
                    -- ^ target package we care about
                    -> Header
                    -> Option (Max Data.Version.Version)
 parseVersionNumber pn header = Option $ fmap Max $ do
-    [name, version, dotcabal] <- Just $ T.splitOn "/" $ pack fp
+    [name, version, dotcabal] <- Just $ splitOn "/" $ T.pack fp
     guard $ PackageName name == pn
-    guard $ name ++ ".cabal" == dotcabal
+    guard $ name <> ".cabal" == dotcabal
     listToMaybe $ map fst
                 $ filter (null . snd)
                 $ readP_to_S Data.Version.parseVersion
-                $ unpack version
+                $ T.unpack version
   where
     fp = headerFilePath header
 
 parsePackage :: MonadThrow m => FilePath -> m Package
 parsePackage fp =
-    case stripSuffix ".tar.gz" $ pack $ takeFileName fp of
-        Nothing -> error $ "Does not end with .tar.gz: " ++ unpack fp
+    case T.stripSuffix ".tar.gz" $ T.pack $ takeFileName fp of
+        Nothing -> error $ "Does not end with .tar.gz: " ++ fp
         Just s -> do
-            let s' = reverse s
-                (b', a') = break (== '-') s'
-                a = reverse $ drop 1 a'
-                b = reverse b'
+            let s' = T.reverse s
+                (b', a') = T.break (== '-') s'
+                a = T.reverse $ T.drop 1 a'
+                b = T.reverse b'
             return $ Package fp (PackageName a) (Version b)
 
-sayPackage :: MonadIO m => Package -> m ()
-sayPackage (Package _ (PackageName name) (Version version)) = say $ concat [name, "-", version]
+sayPackage :: Package -> RIO App ()
+sayPackage (Package _ (PackageName name) (Version version)) =
+  logInfo $ display name <> "-" <> display version
 
-getHackageFile :: Package -> IO FilePath
-getHackageFile (Package _fp (PackageName a') (Version b')) = do
+getHackageFile :: MonadIO m => Package -> m FilePath
+getHackageFile (Package _fp (PackageName a') (Version b')) = liftIO $ do
     stack <- getAppUserDataDirectory "stack"
     return $ stack </> "indices" </> "Hackage" </> "packages" </> a </> b </>
                 concat [a, "-", b, ".tar.gz"]
   where
-    a = unpack a'
-    b = unpack b'
+    a = T.unpack a'
+    b = T.unpack b'
 
 compareTGZ :: Bool -- ^ get diffs?
            -> PackageName
@@ -265,7 +296,7 @@ compareTGZ :: Bool -- ^ get diffs?
            -- ^ new tarball
            -> Version
            -- ^ new version
-           -> IO (Bool, Maybe Diff)
+           -> RIO App (Bool, Maybe Diff)
 compareTGZ getDiffs pn a av b bv = do
     a' <- getContents a
     b' <- getContents b
@@ -273,27 +304,28 @@ compareTGZ getDiffs pn a av b bv = do
     mdiff <-
         if getDiffs && isDiff
             then withSystemTempDirectory "diff" $ \diff -> do
-                let fill dir x = forM_ (mapToList (asMap x)) $ \(fp, bs) -> do
+                let fill dir x = forM_ (Map.toList x) $ \(fp, bs) -> do
                       let fp' = dir </> fp
                       createDirectoryIfMissing True $ takeDirectory fp'
-                      L.writeFile fp' bs
+                      BL.writeFile fp' bs
                 fill (diff </> "old") a'
                 fill (diff </> "new") b'
-                let toNV v = concat
-                        [ unpack (unPackageName pn)
+                let toNV v = T.unpack $ mconcat
+                        [ unPackageName pn
                         , "-"
-                        , unpack (unVersion v)
+                        , unVersion v
                         ]
-                (_, out, _) <- readProcess $ setWorkingDir diff $ proc "diff"
+                (_, out) <- withWorkingDir diff $ proc "diff"
                     [ "-ruN"
                     , "old" </> toNV av
                     , "new" </> toNV bv
                     ]
+                    readProcessStdout
                 return $ Just out
             else return Nothing
     return (a' /= b', mdiff)
   where
-    getContents :: FilePath -> IO (Map FilePath LByteString)
+    getContents :: FilePath -> RIO App (Map FilePath LByteString)
     getContents fp = handleAny (onErr fp) $ runConduitRes
          $ sourceFile fp
         .| ungzip
@@ -302,34 +334,33 @@ compareTGZ getDiffs pn a av b bv = do
         .| foldC
 
     onErr fp e = do
-        say $ concat
-            [ "Error opening tarball: "
-            , pack fp
-            , ", "
-            , tshow e
-            ]
-        return mempty
+      logInfo $
+        "Error opening tarball: " <>
+        fromString fp <>
+        ", " <>
+        displayShow e
+      return mempty
 
     addEntry header
         | headerFileType header == FTNormal = do
             lbs <- sinkLazy
-            yield $ asMap $ singletonMap (headerFilePath header) lbs
+            yield $ Map.singleton (headerFilePath header) lbs
         | otherwise = return ()
 
 colorize :: LByteString -> LByteString
 colorize =
-    intercalate "\n" . map colorLine . L.split 10
+    BL.intercalate "\n" . map colorLine . BL.split 10
   where
     colorLine :: LByteString -> LByteString
     colorLine l =
-      case (toEnum . fromEnum) <$> headMay l of
+      case fst <$> BL8.uncons l of
         Just '-' -> add "31" l
         Just '+' -> add "32" l
         Just '@' -> add "34" l
         _ -> l
 
     add :: LByteString -> LByteString -> LByteString
-    add color l = concat
+    add color l = mconcat
       [ "\x1b["
       , color
       , "m"
