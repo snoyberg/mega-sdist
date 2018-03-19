@@ -4,6 +4,7 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TemplateHaskell #-}
 import RIO
+import RIO.Orphans
 import Conduit
 import RIO.Directory
 import RIO.FilePath
@@ -29,11 +30,14 @@ import RIO.Text.Partial (splitOn)
 data App = App
   { appLogFunc :: !LogFunc
   , appProcessContext :: !ProcessContext
+  , appResourceMap :: !ResourceMap
   }
 instance HasLogFunc App where
   logFuncL = lens appLogFunc (\x y -> x { appLogFunc = y })
 instance HasProcessContext App where
   processContextL = lens appProcessContext (\x y -> x { appProcessContext = y })
+instance HasResourceMap App where
+  resourceMapL = lens appResourceMap (\x y -> x { appResourceMap = y })
 
 getUrlHackage :: MonadIO m => Package -> m Request
 getUrlHackage (Package _fp (PackageName a) (Version b)) =
@@ -88,10 +92,11 @@ main = do
 
     lo <- logOptionsHandle stdout verbose
     pc <- mkDefaultProcessContext
-    withLogFunc lo $ \lf -> do
+    withLogFunc lo $ \lf -> withResourceMap $ \rm -> do
       let app = App
             { appLogFunc = lf
             , appProcessContext = pc
+            , appResourceMap = rm
             }
       runRIO app $ main2 args
 
@@ -185,33 +190,33 @@ go getDiffs fp = do
             then handleFile
             else do
               reqH <- getUrlHackage package
-              runResourceT $ httpSink reqH $ \resH -> do
+              httpSink reqH $ \resH -> do
                 case () of
                   ()
                     | getResponseStatusCode resH `elem` [403, 404] -> do
                         mdiff <-
                           if getDiffs
                             then do
-                                mlatest <- getLatestVersion (packageName package)
+                                mlatest <- lift $ getLatestVersion $ packageName package
                                 case mlatest of
                                   Nothing -> return Nothing
                                   Just (latest, latestv) -> do
-                                    (isDiff, mdiff) <- lift $ lift $ compareTGZ getDiffs (packageName package) latest latestv fp (packageVersion package)
+                                    (isDiff, mdiff) <- lift $ compareTGZ getDiffs (packageName package) latest latestv fp (packageVersion package)
                                     return $ if isDiff then mdiff else Nothing
                             else return Nothing
                         return (DoesNotExist, mdiff)
                     | getResponseStatusCode resH == 403 -> return (DoesNotExist, Nothing)
                     | getResponseStatusCode resH == 200 -> do
-                        liftIO $ createDirectoryIfMissing True $ takeDirectory localFileHackage
+                        createDirectoryIfMissing True $ takeDirectory localFileHackage
                         sinkFileCautious localFileHackage
-                        lift $ lift handleFile
+                        lift handleFile
                     | otherwise -> error $ "Invalid status code: " ++ show (getResponseStatus resH)
     return $ Map.singleton status $ Map.singleton package mdiff
 
 -- | Get the filepath for the latest version of a package from
 -- Hackage, if it exists at all.
-getLatestVersion :: MonadIO m => PackageName -> m (Maybe (FilePath, Version))
-getLatestVersion name = liftIO $ do
+getLatestVersion :: PackageName -> RIO App (Maybe (FilePath, Version))
+getLatestVersion name = do
     stack <- getAppUserDataDirectory "stack"
     let indexTar = stack </> "indices" </> "Hackage" </> "00-index.tar"
     mversion <- runConduitRes
@@ -225,10 +230,10 @@ getLatestVersion name = liftIO $ do
             let p = Package "" name $ toTextVersion version
             fp <- getHackageFile p
             req <- getUrlHackage p
-            runResourceT $ httpSink req $ \res ->
+            httpSink req $ \res ->
               if getResponseStatusCode res == 200
                 then do
-                  liftIO $ createDirectoryIfMissing True $ takeDirectory fp
+                  createDirectoryIfMissing True $ takeDirectory fp
                   sinkFileCautious fp
                   return $ Just (fp, toTextVersion version)
                 else error $ "Could not download from Hackage: " ++ show p
@@ -278,7 +283,7 @@ sayPackage (Package _ (PackageName name) (Version version)) =
   logInfo $ display name <> "-" <> display version
 
 getHackageFile :: MonadIO m => Package -> m FilePath
-getHackageFile (Package _fp (PackageName a') (Version b')) = liftIO $ do
+getHackageFile (Package _fp (PackageName a') (Version b')) = do
     stack <- getAppUserDataDirectory "stack"
     return $ stack </> "indices" </> "Hackage" </> "packages" </> a </> b </>
                 concat [a, "-", b, ".tar.gz"]

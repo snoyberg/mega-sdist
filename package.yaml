@@ -20,6 +20,7 @@ dependencies:
 - http-conduit >= 2.3
 - optparse-simple
 - rio
+- rio-orphans
 - tar-conduit >= 0.2.1
 - yaml
 
