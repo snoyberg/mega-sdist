@@ -151,7 +151,7 @@ main2 Args {..} = do
                 let ident = T.unpack $ mconcat [name, "-", version]
                     msg = "Release: " <> ident
                  in proc "git" ["tag", "-s", ident, "-m", msg] $ \pc -> do
-                      logInfo $ displayShow pc
+                      logInfo $ display pc
                       runProcess_ pc
         Just s -> do
             logInfo "\nThe following packages require a version bump:"
@@ -338,7 +338,7 @@ compareTGZ getDiffs pn a av b bv = do
         "Error opening tarball: " <>
         fromString fp <>
         ", " <>
-        displayShow e
+        display e
       return mempty
 
     addEntry header
