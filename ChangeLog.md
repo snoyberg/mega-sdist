@@ -1,3 +1,7 @@
+## 0.3.3
+
+* Support for new Stack 1.8 console output
+
 ## 0.3.2
 
 * Switch to rio and LTS 11

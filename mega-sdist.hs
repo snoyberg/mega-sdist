@@ -122,7 +122,7 @@ main2 Args {..} = do
         output <- proc "stack" ["sdist", dir] readProcessStderr_
         case decodeUtf8' $ BL.toStrict output of
           Left e -> error $ "Invalid non-UTF8 output: " ++ show e
-          Right text -> case reverse $ map T.unpack $ T.words text of
+          Right text -> case fmap T.unpack $ mapMaybe (T.stripPrefix "Wrote sdist tarball to ") $ T.lines text of
             fp:_ -> do
                 let dest = "tarballs" </> takeFileName fp
                 renameFile fp dest
