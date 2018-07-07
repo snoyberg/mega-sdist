@@ -119,15 +119,15 @@ main2 Args {..} = do
     createDirectoryIfMissing True "tarballs"
 
     tarballs <- forM dirs $ \dir -> do
-        output <- proc "stack" ["sdist", dir] readProcessStderr_
+        output <- proc "stack" ["--no-terminal", "sdist", dir] readProcessStderr_
         case decodeUtf8' $ BL.toStrict output of
           Left e -> error $ "Invalid non-UTF8 output: " ++ show e
-          Right text -> case fmap T.unpack $ mapMaybe (T.stripPrefix "Wrote sdist tarball to ") $ T.lines text of
+          Right text -> case fmap T.unpack $ filter (".tar.gz" `T.isSuffixOf`) $ T.words text of
             fp:_ -> do
                 let dest = "tarballs" </> takeFileName fp
                 renameFile fp dest
                 return dest
-            [] -> error $ "Unexpected 'stack sdist' output in dir: " ++ dir
+            [] -> error $ "Unexpected 'stack sdist' output in dir: " ++ dir ++ "\n\n" ++ T.unpack text
 
     m <- Map.unionsWith mappend <$> mapM (go getDiffs) tarballs
 
