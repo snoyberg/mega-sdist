@@ -1,3 +1,9 @@
+# ChangeLog for mega-sdist
+
+## 0.3.3.1
+
+* Enable multithreaded runtime
+
 ## 0.3.3
 
 * Support for new Stack 1.8 console output

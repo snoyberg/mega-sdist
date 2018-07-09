@@ -1,5 +1,5 @@
 name:        mega-sdist
-version:     0.3.3
+version:     0.3.3.1
 synopsis:    Handles uploading to Hackage from mega repos
 description: Please see the description on Github at <https://github.com/snoyberg/mega-sdist#readme>
 category:    Distribution
@@ -27,3 +27,4 @@ dependencies:
 executables:
   mega-sdist:
     main: mega-sdist.hs
+    ghc-options: -threaded -with-rtsopts=-N
