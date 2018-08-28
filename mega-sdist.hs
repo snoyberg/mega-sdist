@@ -6,27 +6,18 @@
 import RIO
 import RIO.Orphans
 import Pantry hiding (Package (..))
-import Conduit
 import RIO.Directory
 import RIO.FilePath
 import qualified RIO.Map as Map
 import qualified RIO.HashMap as HM
-import Network.HTTP.Simple
-import Data.Conduit.Tar
-import Data.Conduit.Zlib (ungzip)
 import RIO.Process
-import Data.Conduit.Binary (sinkFileCautious)
 import Data.Yaml (Value (..), decodeEither')
 import Options.Applicative.Simple hiding (header, value)
 import qualified Paths_mega_sdist as Paths (version)
 import qualified RIO.ByteString.Lazy as BL
 import qualified Data.ByteString.Lazy.Char8 as BL8
-import Data.Semigroup (Max (..), Option (..))
-import qualified Data.Version
-import Text.ParserCombinators.ReadP (readP_to_S)
 import qualified RIO.Text as T
 import qualified RIO.List as L
-import RIO.Text.Partial (splitOn)
 import Path (parseAbsDir)
 import Path.IO (resolveFile')
 
@@ -184,7 +175,6 @@ go :: Bool -- ^ get diffs
    -> RIO App (Map Status (Map Package (Maybe Diff)))
 go getDiffs fp = do
     package <- parsePackage fp
-    let v = packageVersion package
     (status, mdiff) <- compareTGZ getDiffs (packageName package) (packageVersion package) fp
     return $ Map.singleton status $ Map.singleton package mdiff
 
@@ -258,28 +248,6 @@ compareTGZ getDiffs pn v b = withSystemTempDirectory "diff" $ \diff -> do
           | getDiffs && ec /= ExitSuccess = Just out
           | otherwise = Nothing
     return (status, mdiff)
-  where
-    getContents :: FilePath -> RIO App (Map FilePath LByteString)
-    getContents fp = handleAny (onErr fp) $ runConduitRes
-         $ sourceFile fp
-        .| ungzip
-        .| untarChunks
-        .| withEntries addEntry
-        .| foldC
-
-    onErr fp e = do
-      logInfo $
-        "Error opening tarball: " <>
-        fromString fp <>
-        ", " <>
-        display e
-      return mempty
-
-    addEntry header
-        | headerFileType header == FTNormal = do
-            lbs <- sinkLazy
-            yield $ Map.singleton (headerFilePath header) lbs
-        | otherwise = return ()
 
 colorize :: LByteString -> LByteString
 colorize =
