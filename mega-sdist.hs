@@ -28,6 +28,7 @@ import qualified RIO.Text as T
 import qualified RIO.List as L
 import RIO.Text.Partial (splitOn)
 import Path (parseAbsDir)
+import Path.IO (resolveFile')
 
 data App = App
   { appLogFunc :: !LogFunc
@@ -184,12 +185,7 @@ go :: Bool -- ^ get diffs
 go getDiffs fp = do
     package <- parsePackage fp
     let v = packageVersion package
-        pli = PLIHackage
-          (PackageIdentifierRevision (packageName package) v (CFIRevision (Revision 0)))
-          Nothing
-    (isDiff, mdiff) <- compareTGZ getDiffs (packageName package) pli v fp v
-    logDebug $ "Finished calling compareTGZ, isDiff == " <> displayShow isDiff
-    let status = if isDiff then NeedsVersionBump else NoChanges
+    (status, mdiff) <- compareTGZ getDiffs (packageName package) (packageVersion package) fp
     return $ Map.singleton status $ Map.singleton package mdiff
 
 data Package = Package
@@ -214,37 +210,54 @@ sayPackage (Package _ name version) =
 
 compareTGZ :: Bool -- ^ get diffs?
            -> PackageName
-           -> PackageLocationImmutable
-           -- ^ old contents
            -> Version
-           -- ^ old version
+           -- ^ version
            -> FilePath
            -- ^ new tarball
-           -> Version
-           -- ^ new version
-           -> RIO App (Bool, Maybe Diff)
-compareTGZ getDiffs pn a av b bv = withSystemTempDirectory "diff" $ \diff -> do
+           -> RIO App (Status, Maybe Diff)
+compareTGZ getDiffs pn v b = withSystemTempDirectory "diff" $ \diff -> do
     oldDest <- parseAbsDir $ diff </> "old"
-    unpackPackageLocation oldDest a
+    newDest <- parseAbsDir $ diff </> "new"
+    bAbs <- resolveFile' b
 
-    let fill dir x = forM_ (Map.toList x) $ \(fp, bs) -> do
-          let fp' = dir </> fp
-          createDirectoryIfMissing True $ takeDirectory fp'
-          BL.writeFile fp' bs
-    getContents b >>= fill (diff </> "new")
+    let pirOrig = PackageIdentifierRevision pn v (CFIRevision (Revision 0))
+    let mkPli pir = PLIHackage pir Nothing
+    exists <- (True <$ unpackPackageLocation oldDest (mkPli pirOrig)) `catch` \e ->
+      case e of
+        UnknownHackagePackage{} -> do
+          mpir <- getLatestHackageVersion pn UsePreferredVersions
+          for_ mpir $ unpackPackageLocation oldDest . mkPli
+          pure False
+        _ -> throwIO e
 
-    let toNV = packageIdentifierString . PackageIdentifier pn
+    unpackPackageLocation newDest $ PLIArchive
+      Archive
+        { archiveLocation = ALFilePath $ ResolvedPath (RelFilePath $ fromString b) bAbs
+        , archiveHash = Nothing
+        , archiveSize = Nothing
+        , archiveSubdir = ""
+        }
+      PackageMetadata
+        { pmName = Nothing
+        , pmVersion = Nothing
+        , pmCabal = Nothing
+        , pmTreeKey = Nothing
+        }
+
     (ec, out) <- withWorkingDir diff $ proc "diff"
       [ "-ruN"
-      , "old" </> toNV av
-      , "new" </> toNV bv
+      , "old"
+      , "new"
       ]
       readProcessStdout
-    let isDiff = ec /= ExitSuccess
+    let status
+          | ec == ExitSuccess = NoChanges
+          | exists = NeedsVersionBump
+          | otherwise = DoesNotExist
         mdiff
-          | getDiffs && isDiff = Just out
+          | getDiffs && ec /= ExitSuccess = Just out
           | otherwise = Nothing
-    return (isDiff, mdiff)
+    return (status, mdiff)
   where
     getContents :: FilePath -> RIO App (Map FilePath LByteString)
     getContents fp = handleAny (onErr fp) $ runConduitRes
