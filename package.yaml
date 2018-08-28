@@ -1,5 +1,5 @@
 name:        mega-sdist
-version:     0.3.3.1
+version:     0.4.0.0
 synopsis:    Handles uploading to Hackage from mega repos
 description: Please see the description on Github at <https://github.com/snoyberg/mega-sdist#readme>
 category:    Distribution
@@ -19,6 +19,8 @@ dependencies:
 - conduit-extra
 - http-conduit >= 2.3
 - optparse-simple
+- pantry
+- path
 - rio
 - rio-orphans
 - tar-conduit >= 0.2.1
