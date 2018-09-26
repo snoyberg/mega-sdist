@@ -1,5 +1,9 @@
 # ChangeLog for mega-sdist
 
+## 0.4.0.0
+
+* Move over to pantry for getting package information
+
 ## 0.3.3.1
 
 * Enable multithreaded runtime

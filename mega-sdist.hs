@@ -5,32 +5,27 @@
 {-# LANGUAGE TemplateHaskell #-}
 import RIO
 import RIO.Orphans
-import Conduit
+import Pantry hiding (Package (..))
 import RIO.Directory
 import RIO.FilePath
 import qualified RIO.Map as Map
 import qualified RIO.HashMap as HM
-import Network.HTTP.Simple
-import Data.Conduit.Tar
-import Data.Conduit.Zlib (ungzip)
 import RIO.Process
-import Data.Conduit.Binary (sinkFileCautious)
 import Data.Yaml (Value (..), decodeEither')
 import Options.Applicative.Simple hiding (header, value)
 import qualified Paths_mega_sdist as Paths (version)
 import qualified RIO.ByteString.Lazy as BL
 import qualified Data.ByteString.Lazy.Char8 as BL8
-import Data.Semigroup (Max (..), Option (..))
-import qualified Data.Version
-import Text.ParserCombinators.ReadP (readP_to_S)
 import qualified RIO.Text as T
 import qualified RIO.List as L
-import RIO.Text.Partial (splitOn)
+import Path (parseAbsDir)
+import Path.IO (resolveFile')
 
 data App = App
   { appLogFunc :: !LogFunc
   , appProcessContext :: !ProcessContext
   , appResourceMap :: !ResourceMap
+  , appPantryConfig :: !PantryConfig
   }
 instance HasLogFunc App where
   logFuncL = lens appLogFunc (\x y -> x { appLogFunc = y })
@@ -38,16 +33,8 @@ instance HasProcessContext App where
   processContextL = lens appProcessContext (\x y -> x { appProcessContext = y })
 instance HasResourceMap App where
   resourceMapL = lens appResourceMap (\x y -> x { appResourceMap = y })
-
-getUrlHackage :: MonadIO m => Package -> m Request
-getUrlHackage (Package _fp (PackageName a) (Version b)) =
-    liftIO $ parseRequest $ T.unpack $ mconcat
-        [ "https://s3.amazonaws.com/hackage.fpcomplete.com/package/"
-        , a
-        , "-"
-        , b
-        , ".tar.gz"
-        ]
+instance HasPantryConfig App where
+  pantryConfigL = lens appPantryConfig (\x y -> x { appPantryConfig = y })
 
 getPaths :: MonadIO m => Value -> m [FilePath]
 getPaths value = maybe (error $ "getPaths failed: " ++ show value) return $ do
@@ -92,13 +79,23 @@ main = do
 
     lo <- logOptionsHandle stdout verbose
     pc <- mkDefaultProcessContext
-    withLogFunc lo $ \lf -> withResourceMap $ \rm -> do
-      let app = App
-            { appLogFunc = lf
-            , appProcessContext = pc
-            , appResourceMap = rm
-            }
-      runRIO app $ main2 args
+    stack <- liftIO $ getAppUserDataDirectory "stack"
+    root <- liftIO $ parseAbsDir $ stack </> "pantry"
+    withLogFunc lo $ \lf -> withResourceMap $ \rm ->
+      runRIO lf $
+      withPantryConfig
+        root
+        defaultHackageSecurityConfig
+        HpackBundled
+        8
+        $ \pantryConfig -> do
+            let app = App
+                  { appLogFunc = lf
+                  , appProcessContext = pc
+                  , appResourceMap = rm
+                  , appPantryConfig = pantryConfig
+                  }
+            runRIO app $ main2 args
 
 main2 :: Args -> RIO App ()
 main2 Args {..} = do
@@ -152,8 +149,8 @@ main2 Args {..} = do
         Nothing -> do
             logInfo "\nNo version bumps required, good to go!"
             when toTag $ forM_ (maybe [] Map.keys $ Map.lookup DoesNotExist m)
-              $ \(Package _fp (PackageName name) (Version version)) ->
-                let ident = T.unpack $ mconcat [name, "-", version]
+              $ \(Package _fp name version) ->
+                let ident = packageIdentifierString $ PackageIdentifier name version
                     msg = "Release: " <> ident
                  in proc "git" ["tag", "-s", ident, "-m", msg] $ \pc -> do
                       logInfo $ display pc
@@ -178,70 +175,9 @@ go :: Bool -- ^ get diffs
    -> RIO App (Map Status (Map Package (Maybe Diff)))
 go getDiffs fp = do
     package <- parsePackage fp
-    localFileHackage <- getHackageFile package
-    localFileExists <- doesFileExist localFileHackage
-    let handleFile :: RIO App (Status, Maybe Diff)
-        handleFile = do
-            let v = packageVersion package
-            (isDiff, mdiff) <- compareTGZ getDiffs (packageName package) localFileHackage v fp v
-            return $ if isDiff then (NeedsVersionBump, mdiff) else (NoChanges, Nothing)
-    (status, mdiff) <-
-        if localFileExists
-            then handleFile
-            else do
-              reqH <- getUrlHackage package
-              httpSink reqH $ \resH -> do
-                case () of
-                  ()
-                    | getResponseStatusCode resH `elem` [403, 404] -> do
-                        mdiff <-
-                          if getDiffs
-                            then do
-                                mlatest <- lift $ getLatestVersion $ packageName package
-                                case mlatest of
-                                  Nothing -> return Nothing
-                                  Just (latest, latestv) -> do
-                                    (isDiff, mdiff) <- lift $ compareTGZ getDiffs (packageName package) latest latestv fp (packageVersion package)
-                                    return $ if isDiff then mdiff else Nothing
-                            else return Nothing
-                        return (DoesNotExist, mdiff)
-                    | getResponseStatusCode resH == 403 -> return (DoesNotExist, Nothing)
-                    | getResponseStatusCode resH == 200 -> do
-                        createDirectoryIfMissing True $ takeDirectory localFileHackage
-                        sinkFileCautious localFileHackage
-                        lift handleFile
-                    | otherwise -> error $ "Invalid status code: " ++ show (getResponseStatus resH)
+    (status, mdiff) <- compareTGZ getDiffs (packageName package) (packageVersion package) fp
     return $ Map.singleton status $ Map.singleton package mdiff
 
--- | Get the filepath for the latest version of a package from
--- Hackage, if it exists at all.
-getLatestVersion :: PackageName -> RIO App (Maybe (FilePath, Version))
-getLatestVersion name = do
-    stack <- getAppUserDataDirectory "stack"
-    let indexTar = stack </> "indices" </> "Hackage" </> "00-index.tar"
-    mversion <- runConduitRes
-        $ sourceFile indexTar
-       .| untarChunks
-       .| withEntries yield
-       .| foldMapC (parseVersionNumber name)
-    case mversion of
-        Option Nothing -> return Nothing
-        Option (Just (Max version)) -> do
-            let p = Package "" name $ toTextVersion version
-            fp <- getHackageFile p
-            req <- getUrlHackage p
-            httpSink req $ \res ->
-              if getResponseStatusCode res == 200
-                then do
-                  createDirectoryIfMissing True $ takeDirectory fp
-                  sinkFileCautious fp
-                  return $ Just (fp, toTextVersion version)
-                else error $ "Could not download from Hackage: " ++ show p
-
-newtype PackageName = PackageName { unPackageName :: Text }
-    deriving (Show, Eq, Ord)
-newtype Version = Version { unVersion :: Text }
-    deriving (Show, Eq, Ord)
 data Package = Package
     { packageFile :: !FilePath
     , packageName :: !PackageName
@@ -249,108 +185,69 @@ data Package = Package
     }
     deriving (Show, Eq, Ord)
 
-toTextVersion :: Data.Version.Version -> Version
-toTextVersion = Version . T.pack . Data.Version.showVersion
-
-parseVersionNumber :: PackageName
-                   -- ^ target package we care about
-                   -> Header
-                   -> Option (Max Data.Version.Version)
-parseVersionNumber pn header = Option $ fmap Max $ do
-    [name, version, dotcabal] <- Just $ splitOn "/" $ T.pack fp
-    guard $ PackageName name == pn
-    guard $ name <> ".cabal" == dotcabal
-    listToMaybe $ map fst
-                $ filter (null . snd)
-                $ readP_to_S Data.Version.parseVersion
-                $ T.unpack version
-  where
-    fp = headerFilePath header
-
 parsePackage :: MonadThrow m => FilePath -> m Package
 parsePackage fp =
     case T.stripSuffix ".tar.gz" $ T.pack $ takeFileName fp of
         Nothing -> error $ "Does not end with .tar.gz: " ++ fp
-        Just s -> do
-            let s' = T.reverse s
-                (b', a') = T.break (== '-') s'
-                a = T.reverse $ T.drop 1 a'
-                b = T.reverse b'
-            return $ Package fp (PackageName a) (Version b)
+        Just s ->
+            case parsePackageIdentifier $ T.unpack s of
+                Nothing -> error $ "Invalid package identifier: " ++ T.unpack s
+                Just (PackageIdentifier name version) -> pure $ Package fp name version
 
 sayPackage :: Package -> RIO App ()
-sayPackage (Package _ (PackageName name) (Version version)) =
-  logInfo $ display name <> "-" <> display version
-
-getHackageFile :: MonadIO m => Package -> m FilePath
-getHackageFile (Package _fp (PackageName a') (Version b')) = do
-    stack <- getAppUserDataDirectory "stack"
-    return $ stack </> "indices" </> "Hackage" </> "packages" </> a </> b </>
-                concat [a, "-", b, ".tar.gz"]
-  where
-    a = T.unpack a'
-    b = T.unpack b'
+sayPackage (Package _ name version) =
+  logInfo $ fromString $ packageIdentifierString $ PackageIdentifier name version
 
 compareTGZ :: Bool -- ^ get diffs?
            -> PackageName
-           -> FilePath
-           -- ^ old tarball
            -> Version
-           -- ^ old version
+           -- ^ version
            -> FilePath
            -- ^ new tarball
-           -> Version
-           -- ^ new version
-           -> RIO App (Bool, Maybe Diff)
-compareTGZ getDiffs pn a av b bv = do
-    a' <- getContents a
-    b' <- getContents b
-    let isDiff = a' /= b'
-    mdiff <-
-        if getDiffs && isDiff
-            then withSystemTempDirectory "diff" $ \diff -> do
-                let fill dir x = forM_ (Map.toList x) $ \(fp, bs) -> do
-                      let fp' = dir </> fp
-                      createDirectoryIfMissing True $ takeDirectory fp'
-                      BL.writeFile fp' bs
-                fill (diff </> "old") a'
-                fill (diff </> "new") b'
-                let toNV v = T.unpack $ mconcat
-                        [ unPackageName pn
-                        , "-"
-                        , unVersion v
-                        ]
-                (_, out) <- withWorkingDir diff $ proc "diff"
-                    [ "-ruN"
-                    , "old" </> toNV av
-                    , "new" </> toNV bv
-                    ]
-                    readProcessStdout
-                return $ Just out
-            else return Nothing
-    return (a' /= b', mdiff)
-  where
-    getContents :: FilePath -> RIO App (Map FilePath LByteString)
-    getContents fp = handleAny (onErr fp) $ runConduitRes
-         $ sourceFile fp
-        .| ungzip
-        .| untarChunks
-        .| withEntries addEntry
-        .| foldC
+           -> RIO App (Status, Maybe Diff)
+compareTGZ getDiffs pn v b = withSystemTempDirectory "diff" $ \diff -> do
+    oldDest <- parseAbsDir $ diff </> "old"
+    newDest <- parseAbsDir $ diff </> "new"
+    bAbs <- resolveFile' b
 
-    onErr fp e = do
-      logInfo $
-        "Error opening tarball: " <>
-        fromString fp <>
-        ", " <>
-        display e
-      return mempty
+    let pirOrig = PackageIdentifierRevision pn v (CFIRevision (Revision 0))
+    let mkPli pir = PLIHackage pir Nothing
+    exists <- (True <$ unpackPackageLocation oldDest (mkPli pirOrig)) `catch` \e ->
+      case e of
+        UnknownHackagePackage{} -> do
+          mpir <- getLatestHackageVersion pn UsePreferredVersions
+          for_ mpir $ unpackPackageLocation oldDest . mkPli
+          pure False
+        _ -> throwIO e
 
-    addEntry header
-        | headerFileType header == FTNormal = do
-            lbs <- sinkLazy
-            yield $ Map.singleton (headerFilePath header) lbs
-        | otherwise = return ()
+    unpackPackageLocation newDest $ PLIArchive
+      Archive
+        { archiveLocation = ALFilePath $ ResolvedPath (RelFilePath $ fromString b) bAbs
+        , archiveHash = Nothing
+        , archiveSize = Nothing
+        , archiveSubdir = ""
+        }
+      PackageMetadata
+        { pmName = Nothing
+        , pmVersion = Nothing
+        , pmCabal = Nothing
+        , pmTreeKey = Nothing
+        }
+
+    (ec, out) <- withWorkingDir diff $ proc "diff"
+      [ "-ruN"
+      , "old"
+      , "new"
+      ]
+      readProcessStdout
+    let status
+          | ec == ExitSuccess = NoChanges
+          | exists = NeedsVersionBump
+          | otherwise = DoesNotExist
+        mdiff
+          | getDiffs && ec /= ExitSuccess = Just out
+          | otherwise = Nothing
+    return (status, mdiff)
 
 colorize :: LByteString -> LByteString
 colorize =

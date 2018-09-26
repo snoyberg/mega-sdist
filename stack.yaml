@@ -1,4 +1,9 @@
-resolver: lts-11.3
+resolver: lts-12.7
 extra-deps:
-- rio-0.1.0.0@rev:0
-- rio-orphans-0.1.0.0@rev:0
+- git: https://github.com/commercialhaskell/stack
+  commit: 65dd1d673a75d867325bb1c70f5170386900dd80
+  subdirs:
+  - subs/pantry/
+- hpack-0.29.7@sha256:d7649ade1f027f380ae02c50b56b3e31d9594ce85de2c248586decf647b443a8,4159
+- infer-license-0.2.0@sha256:98dbe0e8d726fd698f9961e69cc69343f37952b4b7428283d0b8dbe3b09f8125,1804
+- persistent-sqlite-2.8.2@sha256:6874958eb2943c4567c30bc0069ce4868b2813c490402c22bb2e0efa5b4c4c71,3873
