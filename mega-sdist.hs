@@ -11,7 +11,7 @@ import RIO.FilePath
 import qualified RIO.Map as Map
 import qualified RIO.HashMap as HM
 import Network.HTTP.Simple
-import Data.Conduit.Tar
+import Data.Conduit.Tar as Tar
 import Data.Conduit.Zlib (ungzip)
 import RIO.Process
 import Data.Conduit.Binary (sinkFileCautious)
@@ -254,7 +254,7 @@ toTextVersion = Version . T.pack . Data.Version.showVersion
 
 parseVersionNumber :: PackageName
                    -- ^ target package we care about
-                   -> Header
+                   -> Tar.Header
                    -> Option (Max Data.Version.Version)
 parseVersionNumber pn header = Option $ fmap Max $ do
     [name, version, dotcabal] <- Just $ splitOn "/" $ T.pack fp
