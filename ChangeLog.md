@@ -4,6 +4,10 @@
 
 * Move over to pantry for getting package information
 
+## 0.3.3.2
+
+* Compatibility with newer http-conduit [stackage#4215](https://github.com/commercialhaskell/stackage/issues/4215)
+
 ## 0.3.3.1
 
 * Enable multithreaded runtime
