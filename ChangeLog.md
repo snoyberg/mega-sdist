@@ -3,6 +3,7 @@
 ## 0.4.0.0
 
 * Move over to pantry for getting package information
+* Ignore whitespace changes [haskell/hackage-server#815](https://github.com/haskell/hackage-server/issues/815)
 
 ## 0.3.3.2
 

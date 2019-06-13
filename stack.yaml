@@ -1,11 +1,7 @@
-resolver: lts-12.20
+resolver: lts-13.21
 extra-deps:
-- git: https://github.com/commercialhaskell/stack
-  commit: d32016cad63eca75f370352b4220763769c18128
-  subdirs:
-  - subs/pantry/
-- Cabal-2.4.0.1@rev:0
-- hpack-0.31.1@rev:0
-- infer-license-0.2.0@rev:0 #for hpack-0.31
-- tar-conduit-0.3.1@rev:0
-- yaml-0.10.4.0@rev:0 #for hpack-0.31
+- pantry-tmp-0.1.0.0@rev:0
+- http-download-0.1.0.0@sha256:842ac3459219989454c2cfa9ac059114eac89ab47f96d4086fd235c23d4ef882,2845
+- rio-prettyprint-0.1.0.0@sha256:4f3596cbe4f9508eb13cb8a4835c402b80e938a7a7b698c215a6666dcc894779,1603
+- ansi-terminal-0.9.1@sha256:48f53532d0f365ffa568c8cf0adc84c66f800a7d80d3329e4f04fa75392f4af1,3225
+- rio-0.1.9.2@sha256:d46a202ae0930b496fd17fd9041d051d45645ab28a2f8d30cf483f50ccb21eb3,3588

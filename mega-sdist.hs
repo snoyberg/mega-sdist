@@ -211,31 +211,31 @@ compareTGZ getDiffs pn v b = withSystemTempDirectory "diff" $ \diff -> do
     bAbs <- resolveFile' b
 
     let pirOrig = PackageIdentifierRevision pn v (CFIRevision (Revision 0))
-    let mkPli pir = PLIHackage pir Nothing
-    exists <- (True <$ unpackPackageLocation oldDest (mkPli pirOrig)) `catch` \e ->
+    let mkPli pir = RPLIHackage pir Nothing
+    exists <- (True <$ unpackPackageLocationRaw oldDest (mkPli pirOrig)) `catch` \e ->
       case e of
         UnknownHackagePackage{} -> do
-          mpir <- getLatestHackageVersion pn UsePreferredVersions
-          for_ mpir $ unpackPackageLocation oldDest . mkPli
+          mpir <- getLatestHackageVersion YesRequireHackageIndex pn UsePreferredVersions
+          for_ mpir $ unpackPackageLocationRaw oldDest . mkPli
           pure False
         _ -> throwIO e
 
-    unpackPackageLocation newDest $ PLIArchive
-      Archive
-        { archiveLocation = ALFilePath $ ResolvedPath (RelFilePath $ fromString b) bAbs
-        , archiveHash = Nothing
-        , archiveSize = Nothing
-        , archiveSubdir = ""
+    unpackPackageLocationRaw newDest $ RPLIArchive
+      RawArchive
+        { raLocation = ALFilePath $ ResolvedPath (RelFilePath $ fromString b) bAbs
+        , raHash = Nothing
+        , raSize = Nothing
+        , raSubdir = ""
         }
-      PackageMetadata
-        { pmName = Nothing
-        , pmVersion = Nothing
-        , pmCabal = Nothing
-        , pmTreeKey = Nothing
+      RawPackageMetadata
+        { rpmName = Nothing
+        , rpmVersion = Nothing
+        , rpmCabal = Nothing
+        , rpmTreeKey = Nothing
         }
 
     (ec, out) <- withWorkingDir diff $ proc "diff"
-      [ "-ruN"
+      [ "-ruNw"
       , "old"
       , "new"
       ]
