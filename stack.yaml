@@ -1,6 +1,6 @@
 resolver: lts-13.21
 extra-deps:
-- pantry-tmp-0.1.0.0@rev:0
+- pantry-0.1.1.0@rev:0
 - http-download-0.1.0.0@sha256:842ac3459219989454c2cfa9ac059114eac89ab47f96d4086fd235c23d4ef882,2845
 - rio-prettyprint-0.1.0.0@sha256:4f3596cbe4f9508eb13cb8a4835c402b80e938a7a7b698c215a6666dcc894779,1603
 - ansi-terminal-0.9.1@sha256:48f53532d0f365ffa568c8cf0adc84c66f800a7d80d3329e4f04fa75392f4af1,3225

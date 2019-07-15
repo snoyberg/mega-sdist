@@ -1,5 +1,9 @@
 # ChangeLog for mega-sdist
 
+## 0.4.0.1
+
+* Move from `pantry-tmp` to `pantry`
+
 ## 0.4.0.0
 
 * Move over to pantry for getting package information

@@ -1,5 +1,5 @@
 name:        mega-sdist
-version:     0.4.0.0
+version:     0.4.0.1
 synopsis:    Handles uploading to Hackage from mega repos
 description: Please see the description on Github at <https://github.com/snoyberg/mega-sdist#readme>
 category:    Distribution
@@ -16,7 +16,7 @@ dependencies:
 - base >=4 && <5
 - bytestring
 - optparse-simple
-- pantry-tmp
+- pantry
 - path
 - path-io
 - rio
