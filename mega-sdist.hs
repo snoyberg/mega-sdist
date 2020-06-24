@@ -88,6 +88,8 @@ main = do
         defaultHackageSecurityConfig
         HpackBundled
         8
+        defaultCasaRepoPrefix
+        defaultCasaMaxPerRequest
         $ \pantryConfig -> do
             let app = App
                   { appLogFunc = lf
@@ -230,7 +232,6 @@ compareTGZ getDiffs pn v b = withSystemTempDirectory "diff" $ \diff -> do
       RawPackageMetadata
         { rpmName = Nothing
         , rpmVersion = Nothing
-        , rpmCabal = Nothing
         , rpmTreeKey = Nothing
         }
 
