@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE NoImplicitPrelude #-}
@@ -90,6 +91,9 @@ main = do
         8
         defaultCasaRepoPrefix
         defaultCasaMaxPerRequest
+#if MIN_VERSION_pantry(0, 5, 3)
+        defaultSnapshotLocation
+#endif
         $ \pantryConfig -> do
             let app = App
                   { appLogFunc = lf
