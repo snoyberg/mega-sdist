@@ -22,6 +22,10 @@ import qualified RIO.List as L
 import Path (parseAbsDir)
 import Path.IO (resolveFile')
 
+#if MIN_VERSION_aeson(2, 0, 0)
+import qualified Data.Aeson.KeyMap
+#endif
+
 data App = App
   { appLogFunc :: !LogFunc
   , appProcessContext :: !ProcessContext
@@ -40,11 +44,17 @@ instance HasPantryConfig App where
 getPaths :: MonadIO m => Value -> m [FilePath]
 getPaths value = maybe (error $ "getPaths failed: " ++ show value) return $ do
     Object top <- return value
-    Object locals <- HM.lookup "locals" top
+    Object locals <- mylookup "locals" top
     forM (toList locals) $ \l -> do
         Object o <- return l
-        String path <- HM.lookup "path" o
+        String path <- mylookup "path" o
         return $ T.unpack path
+  where
+#if MIN_VERSION_aeson(2, 0, 0)
+  mylookup = Data.Aeson.KeyMap.lookup
+#else
+  mylookup = HM.lookup
+#endif
 
 data Args = Args
     { toTag :: !Bool

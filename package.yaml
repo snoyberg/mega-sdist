@@ -1,5 +1,5 @@
 name:        mega-sdist
-version:     0.4.2.0
+version:     0.4.2.1
 synopsis:    Handles uploading to Hackage from mega repos
 description: Please see the description on Github at <https://github.com/snoyberg/mega-sdist#readme>
 category:    Distribution
@@ -22,6 +22,7 @@ dependencies:
 - rio
 - rio-orphans
 - yaml
+- aeson
 
 executables:
   mega-sdist:
