@@ -96,7 +96,7 @@ main = do
       runRIO lf $
       withPantryConfig
         root
-        defaultHackageSecurityConfig
+        defaultPackageIndexConfig
         HpackBundled
         8
         defaultCasaRepoPrefix
