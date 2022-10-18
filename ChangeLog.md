@@ -1,5 +1,9 @@
 # ChangeLog for mega-sdist
 
+## 0.4.3.0
+
+* Support `pantry` 0.6.0
+
 ## 0.4.2.1
 
 * Support `aeson` 2

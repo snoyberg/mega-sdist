@@ -1,1 +1,4 @@
-resolver: lts-16.0
+resolver: lts-18.28
+
+extra-deps:
+- pantry-0.6.0@sha256:c87056df8151441911bece5c09d11738110284dc1eacb292686aa33c4308c8c2,4099
