@@ -1,5 +1,9 @@
 # ChangeLog for mega-sdist
 
+## 0.4.3.1
+
+* Support `pantry` 0.10.0
+
 ## 0.4.3.0
 
 * Support `pantry` 0.6.0
