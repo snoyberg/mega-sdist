@@ -101,8 +101,9 @@ main = do
         8
         defaultCasaRepoPrefix
         defaultCasaMaxPerRequest
-#if MIN_VERSION_pantry(0, 5, 3)
         defaultSnapshotLocation
+#if MIN_VERSION_pantry(0, 10, 0)
+        defaultGlobalHintsLocation
 #endif
         $ \pantryConfig -> do
             let app = App

@@ -1,4 +1,4 @@
-resolver: lts-18.28
+resolver: lts-22.14 # GHC 9.6.4
 
 extra-deps:
-- pantry-0.6.0@sha256:c87056df8151441911bece5c09d11738110284dc1eacb292686aa33c4308c8c2,4099
+- pantry-0.10.0@sha256:6f99ee8d7cfeeb0e2513638618acf80c72d018e7f10120048fa120a409b9dcd2,7864
